@@ -7,26 +7,40 @@
   <meta name="description" content="Vistoria de piscinas, limpeza de sítio e relatórios em PDF. 100% offline.">
   <meta name="theme-color" content="#0B2A4A">
 
-  <!-- ===== PWA / iOS ===== -->
+  <!-- ===== PWA / iOS — ícones na RAIZ, sem pasta icons/ ===== -->
   <link rel="manifest" href="manifest.json">
-  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
-  <link rel="apple-touch-icon" href="icons/icon-180.png">
+  <link rel="icon" href="icon-192.png" type="image/png">
+  <link rel="apple-touch-icon" href="icon-180.png">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="NEGRET'S MASTER">
 
-  <!-- Fonte (cacheada pelo Service Worker após a 1ª visita) -->
+  <!-- Fonte (após a 1ª visita fica em cache; fallback system-ui cobre offline) -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
 
   <link rel="stylesheet" href="css/styles.css">
+
+  <!-- =========================================================
+       Registro IMEDIATO do Service Worker (v10).
+       Antes ficava no fim do app.js esperando o evento 'load' —
+       isso atrasava o controle da página e impedia o offline na
+       mesma sessão. Aqui o registro dispara o quanto antes.
+       ========================================================= -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('./sw.js')
+        .then(function (r) { console.log("[NEGRET'S] Service Worker ativo — escopo:", r.scope); })
+        .catch(function (e) { console.error("[NEGRET'S] Service Worker FALHOU:", e); });
+    }
+  </script>
 </head>
 <body>
   <div id="app"></div>
 
-  <!-- Navegação inferior fixa (com FAB central de vistoria) -->
+  <!-- Navegação inferior fixa (FAB central = nova vistoria) -->
   <nav class="bnav" aria-label="Navegação principal">
     <a href="#/" data-nav="dashboard"><i data-ic="home"></i><span>Início</span></a>
     <a href="#/historico" data-nav="history"><i data-ic="file"></i><span>Histórico</span></a>
