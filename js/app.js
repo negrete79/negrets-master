@@ -1,42 +1,97 @@
 /* =========================================================
-   app.js — v2
-   • Fotos: câmera OU galeria, compressão leve (createImageBitmap),
-     1 por vez, limite por seção → não estoura a memória.
-   • Novo parâmetro: DUREZA CÁLCICA (200–400 ppm).
-   • Relatório EDITÁVEL: #/editar/<id> reabre tudo preenchido.
-   • PDF salvo como string Base64 no IndexedDB (mais compatível).
+   NEGRET'S MASTER — js/app.js (v3 — reescrita completa)
+   -----------------------------------------------------------
+   Arquitetura:
+   1.  CONFIG            → ponto único de integração futura
+   2.  UTILITÁRIOS       → helpers puros (sem efeito colateral)
+   3.  ÍCONES            → SVG inline (offline, sem CDN)
+   4.  TOAST / MODAL     → feedback ao operador
+   5.  AJUSTES           → perfil da empresa (IndexedDB)
+   6.  SINCRONIZAÇÃO     → indicador online/offline + envio
+   7.  HELPERS DE UI     → topbar, empty state, rótulos
+   8.  FOTOS             → pipeline leve (câmera/galeria)
+   9.  CÁLCULOS          → litragem + recomendações químicas
+   10. ROUTER            → SPA por hash
+   11. VIEWS             → dashboard, sítios, vistoria, histórico,
+                           relatório, ajustes
+   12. MIGRAÇÃO          → normaliza dados antigos/parciais
+   13. BOOT              → inicialização + Service Worker
+
+   Persistência: 100% IndexedDB (stores: sites, reports, settings).
+   Nenhum dado sai do aparelho sem SYNC_ENDPOINT configurado.
    ========================================================= */
 'use strict';
 
+/* =========================================================
+   1. CONFIG
+   ========================================================= */
 const CONFIG = {
-  SYNC_ENDPOINT: '' /* URL futura de nuvem; vazio = 100% local */
+  /* Cole aqui a URL de um backend/Google Apps Script para
+     sincronizar à nuvem. Vazio = modo 100% local (offline). */
+  SYNC_ENDPOINT: ''
 };
 
-/* ================= UTILITÁRIOS ================= */
+/* Limites de fotos por campo (proteção de memória em campo) */
+const PHOTO_MAX_DIM   = 1280; /* px — lado maior após compressão   */
+const PHOTO_QUALITY   = 0.65; /* JPEG quality                       */
+const MAX_PHOTOS      = 8;    /* por slot (antes/depois/seção)      */
+
+/* =========================================================
+   2. UTILITÁRIOS
+   ========================================================= */
 const $  = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+
 const fmt0 = new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 0 });
 const fmt1 = new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 1 });
-const uid  = () => (crypto.randomUUID ? crypto.randomUUID() : 'id-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8));
-const esc  = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
-const hojeISO = () => { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 10); };
-const dataBR  = (iso) => new Date(iso + 'T12:00:00').toLocaleDateString('pt-BR');
-const saudacao = () => { const h = new Date().getHours(); return h < 12 ? 'Bom dia' : h < 18 ? 'Boa tarde' : 'Boa noite'; };
 
-/* Base64 ⇄ Blob (PDF agora é salvo como texto — compatível com qualquer aparelho) */
+const uid = () => (crypto.randomUUID
+  ? crypto.randomUUID()
+  : 'id-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8));
+
+const esc = (s) => String(s ?? '')
+  .replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+
+const hojeISO = () => {
+  const d = new Date();
+  d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+  return d.toISOString().slice(0, 10);
+};
+
+const fmtDateBR = (iso) => {
+  const d = new Date(iso);
+  return isNaN(d) ? '—' : d.toLocaleDateString('pt-BR');
+};
+
+const saudacao = () => {
+  const h = new Date().getHours();
+  return h < 12 ? 'Bom dia' : h < 18 ? 'Boa tarde' : 'Boa noite';
+};
+
+/* Base64 ⇄ Blob — o PDF é persistido como TEXTO (Base64) porque
+   é o formato mais compatível entre navegadores/aparelhos. */
 const blobToB64 = (blob) => new Promise((res, rej) => {
   const fr = new FileReader();
   fr.onload = () => res(String(fr.result).split(',')[1]);
-  fr.onerror = rej;
+  fr.onerror = () => rej(fr.error);
   fr.readAsDataURL(blob);
 });
+
 function b64ToBlob(b64){
-  const bin = atob(b64), u8 = new Uint8Array(bin.length);
+  if (!b64) throw new Error('PDF vazio.');
+  const bin = atob(b64);
+  const u8 = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
   return new Blob([u8], { type: 'application/pdf' });
 }
 
-/* ================= ÍCONES ================= */
+/* Leitura segura: retorna obj[k] ou dflt se obj/obj[k] inválido */
+const g = (obj, k, dflt) =>
+  (obj && typeof obj === 'object' && obj[k] !== undefined && obj[k] !== null) ? obj[k] : dflt;
+
+/* =========================================================
+   3. ÍCONES (SVG inline — traço, sem dependência externa)
+   ========================================================= */
 const ICONS = {
   home:'<path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>',
   file:'<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>',
@@ -46,7 +101,6 @@ const ICONS = {
   plus:'<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
   clipboard:'<path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>',
   camera:'<path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/>',
-  image:'<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>',
   check:'<polyline points="20 6 9 17 4 12"/>',
   x:'<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
   back:'<polyline points="15 18 9 12 15 6"/>',
@@ -62,7 +116,8 @@ const ICONS = {
   phone:'<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>',
   edit:'<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4z"/>'
 };
-const icon = (name) => `<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ''}</svg>`;
+const icon = (name) =>
+  `<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ''}</svg>`;
 
 const logoSVG = (s = 44) => `
 <svg width="${s}" height="${s}" viewBox="0 0 512 512" aria-hidden="true">
@@ -77,73 +132,101 @@ const checkSVG = `<svg viewBox="0 0 80 80" fill="none" stroke-linecap="round" st
   <path d="M26 41.5l10 10 18-21" stroke="#0B2A4A" stroke-width="6"/>
 </svg>`;
 
-/* ================= TOAST / MODAL ================= */
+/* =========================================================
+   4. TOAST / MODAL
+   ========================================================= */
 function toast(msg, kind = 'ok', ms = 2800){
+  const icMap = { ok: 'check', warn: 'alert', info: 'sync' };
   const t = document.createElement('div');
   t.className = 'toast ' + kind;
-  t.innerHTML = icon(kind === 'ok' ? 'check' : kind === 'warn' ? 'alert' : 'wifi') + '<span>' + esc(msg) + '</span>';
+  t.innerHTML = icon(icMap[kind] || 'check') + '<span>' + esc(msg) + '</span>';
   $('#toasts').appendChild(t);
   requestAnimationFrame(() => t.classList.add('show'));
   setTimeout(() => { t.classList.remove('show'); setTimeout(() => t.remove(), 320); }, ms);
 }
+
 function confirmDlg({ title, text, okLabel = 'Confirmar', danger = false }){
   return new Promise((res) => {
-    const wrap = document.createElement('div');
-    wrap.className = 'modal-back';
-    wrap.innerHTML = `<div class="modal"><h3>${esc(title)}</h3><p>${esc(text)}</p>
+    const back = document.createElement('div');
+    back.className = 'modal-back';
+    back.innerHTML = `<div class="modal"><h3>${esc(title)}</h3><p>${esc(text)}</p>
       <div class="modal-actions">
         <button class="btn ghost" data-a="0">Cancelar</button>
         <button class="btn ${danger ? 'danger' : 'primary'}" data-a="1">${esc(okLabel)}</button>
       </div></div>`;
-    wrap.addEventListener('click', (e) => {
+    back.addEventListener('click', (e) => {
       const b = e.target.closest('[data-a]');
-      if (b){ wrap.remove(); res(b.dataset.a === '1'); }
-      else if (e.target === wrap){ wrap.remove(); res(false); }
+      if (b){ back.remove(); res(b.dataset.a === '1'); }
+      else if (e.target === back){ back.remove(); res(false); }
     });
-    document.body.appendChild(wrap);
+    document.body.appendChild(back);
   });
 }
 
-/* ================= AJUSTES ================= */
-const DEFAULT_SETTINGS = { companyName: "NEGRET'S MASTER", tagline: 'Piscinas & Limpeza de Sítio', phone: '', email: '', technician: '' };
+/* =========================================================
+   5. AJUSTES DA EMPRESA (store: settings)
+   ========================================================= */
+const DEFAULT_SETTINGS = {
+  companyName: "NEGRET'S MASTER",
+  tagline: 'Piscinas & Limpeza de Sítio',
+  phone: '', email: '', technician: ''
+};
+
 async function getSettings(){
   const rec = await DB.get('settings', 'company');
-  return { ...DEFAULT_SETTINGS, ...((rec && rec.value) || {}) };
+  return { ...DEFAULT_SETTINGS, ...(g(rec, 'value', {})) };
 }
 const saveSettings = (v) => DB.put('settings', { key: 'company', value: v });
 
 let deferredPrompt = null;
 
-/* ================= SINCRONIZAÇÃO ================= */
-const Sync = {
-  async pending(){ return (await DB.all('reports')).filter((r) => !r.synced).length; },
-  async syncNow(){
-    if (!navigator.onLine) return toast('Sem internet agora — seus dados continuam salvos no aparelho.', 'warn');
-    const pend = (await DB.all('reports')).filter((r) => !r.synced);
-    if (!pend.length) return toast('Tudo sincronizado.');
-    if (!CONFIG.SYNC_ENDPOINT)
-      return toast(pend.length + ' relatório(s) salvos localmente. Configure SYNC_ENDPOINT para enviar à nuvem.', 'info', 3800);
-    let ok = 0;
-    for (const r of pend){
-      try {
-        const { pdfBase64, ...json } = r;
-        const res = await fetch(CONFIG.SYNC_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(json) });
-        if (res.ok){ r.synced = true; await DB.put('reports', r); ok++; }
-      } catch (_) {}
-    }
-    toast(ok === pend.length ? ok + ' relatório(s) enviados.' : ok + '/' + pend.length + ' enviados.', ok ? 'ok' : 'warn');
-    updateNetUI();
-  }
-};
+/* =========================================================
+   6. SINCRONIZAÇÃO (indicador visual + envio futuro)
+   ========================================================= */
 const netPillHTML = () => '<i class="dot"></i>' + (navigator.onLine ? 'Online' : 'Offline');
+
 function updateNetUI(){
   const p = $('#netPill');
   if (p){ p.classList.toggle('off', !navigator.onLine); p.innerHTML = netPillHTML(); }
 }
+
+const Sync = {
+  async pendingCount(){
+    return (await DB.all('reports')).filter((r) => !r.synced).length;
+  },
+  async syncNow(){
+    if (!navigator.onLine){
+      return toast('Sem internet agora — seus dados continuam salvos no aparelho.', 'warn');
+    }
+    const pend = (await DB.all('reports')).filter((r) => !r.synced);
+    if (!pend.length) return toast('Tudo sincronizado.');
+
+    if (!CONFIG.SYNC_ENDPOINT){
+      return toast(pend.length + ' relatório(s) salvos localmente. Configure SYNC_ENDPOINT para enviar à nuvem.', 'info', 3800);
+    }
+    let ok = 0;
+    for (const r of pend){
+      try {
+        const { pdfBase64, ...json } = r; /* PDF não vai no JSON */
+        const res = await fetch(CONFIG.SYNC_ENDPOINT, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(json)
+        });
+        if (res.ok){ r.synced = true; await DB.put('reports', r); ok++; }
+      } catch (_) { /* segue para o próximo */ }
+    }
+    toast(ok === pend.length ? ok + ' relatório(s) enviados.' : ok + '/' + pend.length + ' enviados — tente novamente.', ok ? 'ok' : 'warn');
+    updateNetUI();
+  }
+};
+
 window.addEventListener('online',  () => { updateNetUI(); toast('Conexão restabelecida.'); });
 window.addEventListener('offline', () => { updateNetUI(); toast('Você está offline — o app continua funcionando.', 'warn'); });
 
-/* ================= HELPERS DE UI ================= */
+/* =========================================================
+   7. HELPERS DE UI
+   ========================================================= */
 const topbar = (title, back = '#/', right = '') => `
   <header class="topbar">
     <button class="iconbtn" onclick="location.hash='${back}'" aria-label="Voltar">${icon('back')}</button>
@@ -159,16 +242,31 @@ const emptyState = (ic, title, text, href, btn) => `
 
 const labelSec = (k) => ({ pool: 'Piscina', site: 'Sítio', garden: 'Roçada' }[k] || k);
 
-/* =========================================================
-   FOTOS — pipeline leve (v2):
-   1) createImageBitmap (decodifica direto na GPU, menos RAM)
-   2) fallback <img> + canvas
-   3) máximo 1280px / qualidade 0.65 / uma foto por vez
-   Sem o atributo "capture" → o Android/iOS oferece CÂMERA e
-   GALERIA do dispositivo naturalmente.
-   ========================================================= */
-const PHOTO_MAX_DIM = 1280, PHOTO_QUALITY = 0.65, MAX_PHOTOS = 8;
+/* Contador animado (litragem) */
+function animateNumber(el, to, dur = 550){
+  if (!el) return;
+  const from = Number(el.dataset.v || 0);
+  const t0 = performance.now();
+  const step = (t) => {
+    const p = Math.min(1, (t - t0) / dur);
+    const e = 1 - Math.pow(1 - p, 3);
+    el.textContent = fmt0.format(Math.round(from + (to - from) * e));
+    if (p < 1) requestAnimationFrame(step);
+    else el.dataset.v = to;
+  };
+  requestAnimationFrame(step);
+}
 
+/* =========================================================
+   8. FOTOS — pipeline leve
+   -----------------------------------------------------------
+   • Sem atributo "capture": o Android/iOS oferece CÂMERA e
+     GALERIA do dispositivo naturalmente.
+   • createImageBitmap decodifica direto (menos RAM) e é
+     liberado com .close() após o uso.
+   • Processamento UMA foto por vez → pico de memória baixo.
+   • Fallback <img>+canvas para navegadores antigos.
+   ========================================================= */
 function legacyCompress(file){
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -177,12 +275,12 @@ function legacyCompress(file){
       try {
         const scale = Math.min(1, PHOTO_MAX_DIM / Math.max(img.width, img.height));
         const c = document.createElement('canvas');
-        c.width = Math.max(1, Math.round(img.width * scale));
+        c.width  = Math.max(1, Math.round(img.width * scale));
         c.height = Math.max(1, Math.round(img.height * scale));
         c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
         URL.revokeObjectURL(url);
         const out = c.toDataURL('image/jpeg', PHOTO_QUALITY);
-        c.width = c.height = 0; /* libera memória do canvas */
+        c.width = c.height = 0; /* libera o canvas */
         resolve(out);
       } catch (e){ URL.revokeObjectURL(url); reject(e); }
     };
@@ -190,6 +288,7 @@ function legacyCompress(file){
     img.src = url;
   });
 }
+
 async function compressImage(file){
   let bmp = null;
   if (window.createImageBitmap){
@@ -200,75 +299,72 @@ async function compressImage(file){
     try {
       const scale = Math.min(1, PHOTO_MAX_DIM / Math.max(bmp.width, bmp.height));
       const c = document.createElement('canvas');
-      c.width = Math.max(1, Math.round(bmp.width * scale));
+      c.width  = Math.max(1, Math.round(bmp.width * scale));
       c.height = Math.max(1, Math.round(bmp.height * scale));
       c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
-      if (bmp.close) bmp.close(); /* LIBERA a imagem original da memória */
+      if (bmp.close) bmp.close(); /* LIBERA a imagem original */
       const out = c.toDataURL('image/jpeg', PHOTO_QUALITY);
       c.width = c.height = 0;
       return out;
-    } catch (e){ if (bmp.close) bmp.close(); }
+    } catch (e){ if (bmp.close) try { bmp.close(); } catch (_) {} }
   }
-  return legacyCompress(file); /* rede de segurança */
-}
-
-function animateNumber(el, to, dur = 550){
-  if (!el) return;
-  const from = Number(el.dataset.v || 0);
-  const t0 = performance.now();
-  const step = (t) => {
-    const p = Math.min(1, (t - t0) / dur);
-    const e = 1 - Math.pow(1 - p, 3);
-    el.textContent = fmt0.format(Math.round(from + (to - from) * e));
-    if (p < 1) requestAnimationFrame(step); else el.dataset.v = to;
-  };
-  requestAnimationFrame(step);
+  return legacyCompress(file);
 }
 
 /* =========================================================
-   CÁLCULO AUTOMÁTICO DE LITRAGEM
-   Retangular: C × L × P × 1000
-   Redonda:    D × D × P × 0,785 × 1000
+   9. CÁLCULOS
+   -----------------------------------------------------------
+   LITRAGEM:
+     Retangular: C × L × Prof × 1000
+     Redonda:    D × D × Prof × 0,785 × 1000
+   RECOMENDAÇÕES (por litro):
+     Cloro  < 1,0 ppm → Volume × 0,004 g de Cloro
+     pH     > 7,6     → Volume × 0,007 ml de Redutor
+     Dureza < 200 / > 400 ppm → orientação de correção
    ========================================================= */
 function calcVolume(shape, { length = 0, width = 0, diameter = 0, depth = 0 } = {}){
-  const C = parseFloat(length) || 0, L = parseFloat(width) || 0,
-        D = parseFloat(diameter) || 0, P = parseFloat(depth) || 0;
+  const C = parseFloat(length)  || 0;
+  const L = parseFloat(width)   || 0;
+  const D = parseFloat(diameter)|| 0;
+  const P = parseFloat(depth)   || 0;
   if (P <= 0) return 0;
   if (shape === 'retangular') return C * L * P * 1000;
   if (shape === 'redonda')    return D * D * P * 0.785 * 1000;
   return 0;
 }
 
-/* =========================================================
-   RECOMENDAÇÕES AUTOMÁTICAS (agora com DUREZA CÁLCICA)
-   Cloro < 1,0 ppm → Volume × 0,004 g de cloro
-   pH    > 7,6     → Volume × 0,007 ml de redutor
-   Dureza <200 / >400 ppm → orientação de correção
-   ========================================================= */
 function computeRecs(vol, cloro, ph, dureza){
   const recs = [];
-  const cl = parseFloat(cloro), p = parseFloat(ph), dz = parseFloat(dureza);
-  if (vol > 0 && !isNaN(cl) && cl < 1.0) recs.push({ kind: 'cloro', text: `Adicionar ${fmt1.format(vol * 0.004)} g de Cloro` });
-  if (vol > 0 && !isNaN(p)  && p  > 7.6) recs.push({ kind: 'ph',    text: `Adicionar ${fmt1.format(vol * 0.007)} ml de Redutor de pH` });
-  if (!isNaN(dz) && dz < 200) recs.push({ kind: 'dureza', text: `Dureza cálcica baixa (${fmt0.format(dz)} ppm) — aplicar cloreto de cálcio conforme tabela do fabricante` });
-  if (!isNaN(dz) && dz > 400) recs.push({ kind: 'dureza', text: `Dureza cálcica alta (${fmt0.format(dz)} ppm) — diluir com água nova ou usar removedor de dureza` });
+  const cl = parseFloat(cloro);
+  const p  = parseFloat(ph);
+  const dz = parseFloat(dureza);
+  if (vol > 0 && !isNaN(cl) && cl < 1.0)
+    recs.push({ kind: 'cloro', text: `Adicionar ${fmt1.format(vol * 0.004)} g de Cloro` });
+  if (vol > 0 && !isNaN(p) && p > 7.6)
+    recs.push({ kind: 'ph', text: `Adicionar ${fmt1.format(vol * 0.007)} ml de Redutor de pH` });
+  if (!isNaN(dz) && dz < 200)
+    recs.push({ kind: 'dureza', text: `Dureza cálcica baixa (${fmt0.format(dz)} ppm) — aplicar cloreto de cálcio conforme tabela do fabricante` });
+  if (!isNaN(dz) && dz > 400)
+    recs.push({ kind: 'dureza', text: `Dureza cálcica alta (${fmt0.format(dz)} ppm) — diluir com água nova ou usar removedor de dureza` });
   return recs;
 }
 
-/* ================= ROTAS ================= */
+/* =========================================================
+   10. ROUTER (SPA por hash)
+   ========================================================= */
 const App = {
   el: null,
   routes: [
-    { re: /^#\/?$/,                          view: 'dashboard', m: () => ({}) },
-    { re: /^#\/sites$/,                      view: 'sites',     m: () => ({}) },
-    { re: /^#\/site\/novo$/,                 view: 'siteForm',  m: () => ({}) },
-    { re: /^#\/site\/([\w-]+)$/,             view: 'siteForm',  m: (m) => ({ id: m[1] }) },
-    { re: /^#\/vistoria$/,                   view: 'inspection',m: () => ({}) },
-    { re: /^#\/vistoria\/([\w-]+)$/,         view: 'inspection',m: (m) => ({ siteId: m[1] }) },
-    { re: /^#\/editar\/([\w-]+)$/,           view: 'inspection',m: (m) => ({ reportId: m[1] }) }, /* NOVO */
-    { re: /^#\/historico$/,                  view: 'history',   m: () => ({}) },
-    { re: /^#\/relatorio\/([\w-]+)$/,        view: 'reportView',m: (m) => ({ id: m[1] }) },
-    { re: /^#\/ajustes$/,                    view: 'settings',  m: () => ({}) }
+    { re: /^#\/?$/,                  view: 'dashboard',  m: () => ({}) },
+    { re: /^#\/sites$/,              view: 'sites',      m: () => ({}) },
+    { re: /^#\/site\/novo$/,         view: 'siteForm',   m: () => ({}) },
+    { re: /^#\/site\/([\w-]+)$/,     view: 'siteForm',   m: (m) => ({ id: m[1] }) },
+    { re: /^#\/vistoria$/,           view: 'inspection', m: () => ({}) },
+    { re: /^#\/vistoria\/([\w-]+)$/, view: 'inspection', m: (m) => ({ siteId: m[1] }) },
+    { re: /^#\/editar\/([\w-]+)$/,   view: 'inspection', m: (m) => ({ reportId: m[1] }) },
+    { re: /^#\/historico$/,          view: 'history',    m: () => ({}) },
+    { re: /^#\/relatorio\/([\w-]+)$/,view: 'reportView', m: (m) => ({ id: m[1] }) },
+    { re: /^#\/ajustes$/,            view: 'settings',   m: () => ({}) }
   ],
   async render(){
     if (!this.el) return;
@@ -278,23 +374,35 @@ const App = {
       const m = h.match(r.re);
       if (m){ view = r.view; params = r.m(m); break; }
     }
-    try { await Views[view](params); }
-    catch (err){ console.error(err); this.el.innerHTML = topbar('Erro', '#/') + `<main class="view container">${emptyState('alert','Algo deu errado', String(err && err.message || err))}</main>`; }
+    try {
+      await Views[view](params);
+    } catch (err){
+      console.error('[NEGRET\'S]', err);
+      this.el.innerHTML = topbar('Erro', '#/') +
+        `<main class="view container">${emptyState('alert','Algo deu errado', String((err && err.message) || err))}</main>`;
+    }
     updateNav(view);
     window.scrollTo({ top: 0 });
   }
 };
+
 function updateNav(view){
-  const map = { dashboard:'dashboard', history:'history', sites:'sites', siteForm:'sites', settings:'settings', inspection:'inspection', reportView:'history' };
+  const map = {
+    dashboard: 'dashboard', history: 'history', sites: 'sites',
+    siteForm: 'sites', settings: 'settings',
+    inspection: 'inspection', reportView: 'history'
+  };
   const key = map[view] || 'dashboard';
   $$('.bnav a').forEach((a) => a.classList.toggle('active', a.dataset.nav === key));
 }
 window.addEventListener('hashchange', () => App.render());
 
-/* ================= VIEWS ================= */
+/* =========================================================
+   11. VIEWS
+   ========================================================= */
 const Views = {};
 
-/* ---------- DASHBOARD ---------- */
+/* ---------- 11.1 DASHBOARD ---------- */
 Views.dashboard = async () => {
   const [settings, sites, reports] = await Promise.all([getSettings(), DB.all('sites'), DB.all('reports')]);
   const pending = reports.filter((r) => !r.synced).length;
@@ -305,7 +413,7 @@ Views.dashboard = async () => {
     <div class="hero-in">
       <div class="brand">
         ${logoSVG(46)}
-        <div><h1>NEGRET&rsquo;S MASTER</h1><p>${esc(settings.tagline || 'Aplicativo para Piscineiro e Limpeza de Sítio')}</p></div>
+        <div><h1>NEGRET&rsquo;S MASTER</h1><p>${esc(settings.tagline)}</p></div>
       </div>
       <div class="hello-row">
         <p class="hello">${saudacao()}${settings.technician ? ', ' + esc(settings.technician) : ''}!</p>
@@ -327,6 +435,7 @@ Views.dashboard = async () => {
       </span>
       <span class="pill">COMEÇAR</span>
     </button>
+
     <button class="card act" id="goHistorico">
       <span class="act-ic">${icon('folder')}</span>
       <span class="act-tx">
@@ -337,6 +446,7 @@ Views.dashboard = async () => {
       <span class="pill">ACESSAR</span>
       ${pending ? `<span class="bubble">${pending}</span>` : ''}
     </button>
+
     <button class="card act" id="goSites">
       <span class="act-ic">${icon('pin')}</span>
       <span class="act-tx">
@@ -346,6 +456,7 @@ Views.dashboard = async () => {
       </span>
       <span class="pill">GERENCIAR</span>
     </button>
+
     <button class="card act" id="goAjustes">
       <span class="act-ic">${icon('gear')}</span>
       <span class="act-tx">
@@ -355,11 +466,14 @@ Views.dashboard = async () => {
       </span>
       <span class="pill">EDITAR</span>
     </button>
+
     <section class="sync-strip">
       <div>
         ${icon(navigator.onLine ? 'wifi' : 'wifioff')}
-        <div><strong>${navigator.onLine ? 'Online' : 'Offline'}</strong>
-        <small>${pending ? pending + ' relatório' + (pending > 1 ? 's' : '') + ' aguardando sincronização' : 'Tudo salvo neste aparelho'}</small></div>
+        <div>
+          <strong>${navigator.onLine ? 'Online' : 'Offline'}</strong>
+          <small>${pending ? pending + ' relatório' + (pending > 1 ? 's' : '') + ' aguardando sincronização' : 'Tudo salvo neste aparelho'}</small>
+        </div>
       </div>
       <button class="btn small ${pending && navigator.onLine ? 'primary' : 'ghost'}" id="syncNow">${icon('sync')} Sincronizar</button>
     </section>
@@ -372,9 +486,10 @@ Views.dashboard = async () => {
   $('#syncNow').onclick     = () => Sync.syncNow();
 };
 
-/* ---------- SÍTIOS ---------- */
+/* ---------- 11.2 SÍTIOS (lista) ---------- */
 Views.sites = async () => {
   const sites = (await DB.all('sites')).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+
   App.el.innerHTML = topbar('Sítios & Clientes', '#/') + `
   <main class="view container">
     <button class="btn primary block" id="newSite">${icon('plus')} Novo Cadastro</button>
@@ -389,28 +504,35 @@ Views.sites = async () => {
           ${s.volume ? `<span class="vol-chip">${fmt0.format(s.volume)} L</span>` : ''}
           <button class="del" aria-label="Excluir">${icon('trash')}</button>
         </div>`).join('')
-      : emptyState('pin', 'Nenhum sítio cadastrado', 'Cadastre seus clientes para agilizar as vistorias.', '#/site/novo', 'Cadastrar agora')}
+      : emptyState('pin', 'Nenhum sítio cadastrado', 'Cadastre seus clientes para agilizar as vistorias em campo.', '#/site/novo', 'Cadastrar agora')}
     </div>
   </main>`;
+
   $('#newSite').onclick = () => location.hash = '#/site/novo';
+
   $$('#siteList .item').forEach((el) => {
-    el.onclick = (e) => { if (e.target.closest('.del')) return; location.hash = '#/site/' + el.dataset.id; };
+    el.onclick = (e) => {
+      if (e.target.closest('.del')) return;
+      location.hash = '#/site/' + el.dataset.id;
+    };
   });
+
   $$('#siteList .del').forEach((b) => b.onclick = async (e) => {
     e.stopPropagation();
     const id = b.closest('.item').dataset.id;
     if (await confirmDlg({ title: 'Excluir cadastro?', text: 'Esta ação não pode ser desfeita.', okLabel: 'Excluir', danger: true })){
-      await DB.del('sites', id);
+      await DB.del('sites', id); /* PERSISTÊNCIA: remoção no IndexedDB */
       toast('Cadastro excluído.');
       Views.sites();
     }
   });
 };
 
-/* ---------- CADASTRO DE SÍTIO ---------- */
+/* ---------- 11.3 CADASTRO DE SÍTIO / PISCINA ---------- */
 Views.siteForm = async ({ id } = {}) => {
   const site = id ? await DB.get('sites', id) : null;
-  const f = site ? { ...site } : { poolType: 'fibra', poolShape: 'retangular', length: '', width: '', diameter: '', depth: '' };
+  const f = site ? { ...site }
+                 : { poolType: 'fibra', poolShape: 'retangular', length: '', width: '', diameter: '', depth: '' };
 
   App.el.innerHTML = topbar(site ? 'Editar Sítio' : 'Novo Sítio', '#/sites') + `
   <main class="view container">
@@ -422,6 +544,7 @@ Views.siteForm = async ({ id } = {}) => {
         <label class="field"><span>Telefone / WhatsApp</span><input name="phone" inputmode="tel" value="${esc(f.phone || '')}" placeholder="(44) 99999-0000"></label>
         <label class="field"><span>Endereço</span><input name="address" value="${esc(f.address || '')}" placeholder="Rua, distrito, cidade"></label>
       </div>
+
       <div class="form-sec">
         <h2>Dados da Piscina</h2>
         <span class="field-lbl">Tipo de Piscina</span>
@@ -434,7 +557,9 @@ Views.siteForm = async ({ id } = {}) => {
           <label><input type="radio" name="poolShape" value="retangular" ${f.poolShape !== 'redonda' ? 'checked' : ''}><span>Retangular</span></label>
           <label><input type="radio" name="poolShape" value="redonda" ${f.poolShape === 'redonda' ? 'checked' : ''}><span>Redonda</span></label>
         </div>
+
         <div id="poolFields"></div>
+
         <div class="gauge">
           <div class="tank" aria-hidden="true">
             <div class="tank-water" id="tankWater"><span class="bub b1"></span><span class="bub b2"></span></div>
@@ -447,6 +572,7 @@ Views.siteForm = async ({ id } = {}) => {
           </div>
         </div>
       </div>
+
       <button class="btn primary block" type="submit">${site ? icon('check') + ' Salvar Alterações' : icon('plus') + ' Salvar Sítio'}</button>
     </form>
   </main>`;
@@ -455,8 +581,7 @@ Views.siteForm = async ({ id } = {}) => {
   const shape = () => $('#siteForm input[name="poolShape"]:checked').value;
 
   function renderFields(){
-    const s = shape();
-    poolFields.innerHTML = s === 'retangular' ? `
+    poolFields.innerHTML = shape() === 'retangular' ? `
       <div class="grid3">
         <label class="field"><span>Comprimento (m)</span><input type="number" step="0.1" min="0" inputmode="decimal" name="length" value="${esc(f.length || '')}" placeholder="0,0"></label>
         <label class="field"><span>Largura (m)</span><input type="number" step="0.1" min="0" inputmode="decimal" name="width" value="${esc(f.width || '')}" placeholder="0,0"></label>
@@ -469,15 +594,18 @@ Views.siteForm = async ({ id } = {}) => {
     $$('#poolFields input').forEach((i) => i.addEventListener('input', updateVolume));
     updateVolume();
   }
+
   function currentVolume(){
-    const v = (k) => parseFloat(($('#siteForm [name="' + k + '"]') || {}).value) || 0;
+    const v = (k) => { const el = $('#siteForm [name="' + k + '"]'); return el ? parseFloat(el.value) || 0 : 0; };
     return calcVolume(shape(), { length: v('length'), width: v('width'), diameter: v('diameter'), depth: v('depth') });
   }
+
   function updateVolume(){
     const vol = currentVolume();
     animateNumber($('#volNum'), Math.round(vol));
     $('#tankWater').style.height = vol > 0 ? (18 + Math.min(82, Math.log10(Math.max(vol, 10)) / 5 * 82)) + '%' : '0%';
   }
+
   $$('#siteForm input[name="poolShape"]').forEach((r) => r.addEventListener('change', renderFields));
   renderFields();
 
@@ -486,75 +614,88 @@ Views.siteForm = async ({ id } = {}) => {
     const data = Object.fromEntries(new FormData(e.target).entries());
     if (!String(data.ownerName || '').trim() || !String(data.siteName || '').trim())
       return toast('Preencha proprietário e nome do sítio.', 'warn');
+
+    /* PERSISTÊNCIA: perfil completo (com litragem) no IndexedDB */
     const rec = {
       id: f.id || uid(),
-      ownerName: data.ownerName.trim(), siteName: data.siteName.trim(),
-      phone: data.phone || '', address: data.address || '',
-      poolType: data.poolType, poolShape: data.poolShape,
-      length: data.length || '', width: data.width || '', diameter: data.diameter || '', depth: data.depth || '',
+      ownerName: data.ownerName.trim(),
+      siteName: data.siteName.trim(),
+      phone: data.phone || '',
+      address: data.address || '',
+      poolType: data.poolType,
+      poolShape: data.poolShape,
+      length: data.length || '', width: data.width || '',
+      diameter: data.diameter || '', depth: data.depth || '',
       volume: Math.round(currentVolume()),
-      createdAt: f.createdAt || Date.now(), updatedAt: Date.now()
+      createdAt: f.createdAt || Date.now(),
+      updatedAt: Date.now()
     };
-    await DB.put('sites', rec); /* PERSISTÊNCIA: IndexedDB */
+    await DB.put('sites', rec);
     toast('Sítio salvo no aparelho.');
     location.hash = '#/sites';
   };
 };
 
-/* ---------- VISTORIA (Nova + EDITAR) ---------- */
+/* ---------- 11.4 VISTORIA (nova + edição de relatório) ---------- */
 Views.inspection = async ({ siteId, reportId } = {}) => {
-  const [sites, settings] = await Promise.all([DB.all('sites'), getSettings()]);
   const TASKS = ReportPDF.TASKS;
-
+  const [sites, settings] = await Promise.all([DB.all('sites'), getSettings()]);
   const editSource = reportId ? await DB.get('reports', reportId) : null;
 
   if (!sites.length && !editSource){
     App.el.innerHTML = topbar('Nova Vistoria', '#/') + `
-      <main class="view container">${emptyState('clipboard', 'Cadastre um sítio primeiro', 'A vistoria precisa de um cliente selecionado.', '#/site/novo', 'Cadastrar agora')}</main>`;
+      <main class="view container">${emptyState('clipboard','Cadastre um sítio primeiro','A vistoria precisa de um cliente selecionado.','#/site/novo','Cadastrar agora')}</main>`;
     return;
   }
 
-  /* Monta o rascunho — vazio (nova) ou preenchido do relatório (edição) */
-  const g = (o, k, dflt) => (o && o[k] !== undefined && o[k] !== null) ? o[k] : dflt;
-  const taskSet = (src, keys) => { const t = {}; keys.forEach(([k]) => t[k] = !!(src && src.tasks && src.tasks[k])); return t; };
-  const photoSet = (src) => ({
-    before: Array.isArray(g(src && src.photos, 'before', [])) ? [...src.photos.before] : [],
-    after:  Array.isArray(g(src && src.photos, 'after',  [])) ? [...src.photos.after]  : []
-  });
+  /* ---- Fábricas defensivas: nunca retornam null/undefined ---- */
+  const taskSet = (src, keys) => {
+    const t = {};
+    keys.forEach(([k]) => { t[k] = !!(src && src.tasks && src.tasks[k]); });
+    return t;
+  };
+  const photoSet = (src) => {
+    const ph = (src && src.photos && typeof src.photos === 'object') ? src.photos : {};
+    return {
+      before: Array.isArray(ph.before) ? ph.before.slice() : [],
+      after:  Array.isArray(ph.after)  ? ph.after.slice()  : []
+    };
+  };
+  const secDraft = (src, keys, extra) => Object.assign({
+    active: !!g(src, 'active', false),
+    tasks: taskSet(src, keys),
+    photos: photoSet(src)
+  }, extra || {});
 
+  /* ---- Rascunho da vistoria (persistido ao finalizar) ---- */
   const draft = {
-    siteId: g(editSource, 'siteId', (siteId && sites.some((s) => s.id === siteId)) ? siteId : (sites[0] ? sites[0].id : '')),
+    siteId: g(editSource, 'siteId',
+      (siteId && sites.some((s) => s.id === siteId)) ? siteId : (sites[0] ? sites[0].id : '')),
     dateISO: (editSource ? String(editSource.dateISO).slice(0, 10) : hojeISO()),
-    pool: {
-      active: editSource ? !!(editSource.pool && editSource.pool.active) : true,
-      ph: String(g(editSource && editSource.pool, 'ph', '')),
-      cloro: String(g(editSource && editSource.pool, 'cloro', '')),
-      alcal: String(g(editSource && editSource.pool, 'alcal', '')),
-      dureza: String(g(editSource && editSource.pool, 'dureza', '')), /* NOVO */
-      tasks: taskSet(editSource && editSource.pool, TASKS.pool),
-      photos: photoSet(editSource && editSource.pool)
-    },
-    site: {
-      active: editSource ? !!(editSource.site && editSource.site.active) : false,
-      tasks: taskSet(editSource && editSource.site, TASKS.site),
-      photos: photoSet(editSource && editSource.site)
-    },
-    garden: {
-      active: editSource ? !!(editSource.garden && editSource.garden.active) : false,
-      tasks: taskSet(editSource && editSource.garden, TASKS.garden),
-      notes: String(g(editSource && editSource.garden, 'notes', '')),
-      photos: photoSet(editSource && editSource.garden)
-    },
+    pool: secDraft(editSource && editSource.pool, TASKS.pool, {
+      active: editSource ? !!g(editSource.pool, 'active', false) : true, /* Aba A vem ativa por padrão */
+      ph:     String(g(editSource && editSource.pool, 'ph', '')),
+      cloro:  String(g(editSource && editSource.pool, 'cloro', '')),
+      alcal:  String(g(editSource && editSource.pool, 'alcal', '')),
+      dureza: String(g(editSource && editSource.pool, 'dureza', ''))
+    }),
+    site:   secDraft(editSource && editSource.site,   TASKS.site),
+    garden: secDraft(editSource && editSource.garden, TASKS.garden, {
+      notes: String(g(editSource && editSource.garden, 'notes', ''))
+    }),
     generalNotes: String(g(editSource, 'generalNotes', ''))
   };
 
   const curSite = () => sites.find((s) => s.id === draft.siteId);
+  const refVolume = () =>
+    (curSite() && curSite().volume) ||
+    (editSource && editSource.pool && editSource.pool.volume) || 0;
+
   const volLabel = () => {
-    const s = curSite();
-    if (s && s.volume) return fmt0.format(s.volume) + ' L';
-    if (editSource && editSource.pool && editSource.pool.volume) return fmt0.format(editSource.pool.volume) + ' L';
-    return 'não calculada';
+    const v = refVolume();
+    return v ? fmt0.format(v) + ' L' : 'não calculada';
   };
+
   const quickChips = (s) => !s ? '' : [
     `<span>${icon('user')}${esc(s.ownerName)}</span>`,
     s.phone  ? `<span>${icon('phone')}${esc(s.phone)}</span>` : '',
@@ -567,10 +708,10 @@ Views.inspection = async ({ siteId, reportId } = {}) => {
       <span class="box">${icon('check')}</span><span>${lbl}</span>
     </label>`).join('');
 
-  /* SEM "capture": abre câmera OU galeria do dispositivo */
   const photoSlot = (sec, kind, label) => `
     <div class="photo-slot" data-sec="${sec}" data-kind="${kind}">
-      <div class="photo-head"><span>${label}</span>
+      <div class="photo-head">
+        <span>${label}</span>
         <button type="button" class="btn small ghost cam">${icon('camera')} ${kind === 'before' ? 'Foto Antes' : 'Foto Depois'}</button>
       </div>
       <div class="thumbs" data-thumbs></div>
@@ -614,7 +755,10 @@ Views.inspection = async ({ siteId, reportId } = {}) => {
       <div class="sec-body">${body}</div>
     </section>`;
 
-  App.el.innerHTML = topbar(editSource ? 'Editar Relatório' : 'Nova Vistoria', editSource ? '#/relatorio/' + editSource.id : '#/') + `
+  App.el.innerHTML = topbar(
+    editSource ? 'Editar Relatório' : 'Nova Vistoria',
+    editSource ? '#/relatorio/' + editSource.id : '#/'
+  ) + `
   <main class="view container">
     <div class="card form">
       <label class="field"><span>Sítio / Cliente</span>
@@ -641,35 +785,45 @@ Views.inspection = async ({ siteId, reportId } = {}) => {
     <button class="btn primary block big" id="finish">${icon('check')} ${editSource ? 'Salvar Alterações e Regenerar PDF' : 'Finalizar e Gerar Relatório'}</button>
   </main>`;
 
+  /* ---- Recomendações ao vivo (requisito da Aba A) ---- */
   function renderRecs(){
-    const box = $('#recBox'); if (!box) return;
-    const vol = (curSite() && curSite().volume) || (editSource && editSource.pool && editSource.pool.volume) || 0;
-    const recs = computeRecs(vol, draft.pool.cloro, draft.pool.ph, draft.pool.dureza);
-    const touched = draft.pool.cloro !== '' || draft.pool.ph !== '' || draft.pool.alcal !== '' || draft.pool.dureza !== '';
-    if (!vol && touched){
+    const box = $('#recBox');
+    if (!box) return;
+    const recs = computeRecs(refVolume(), draft.pool.cloro, draft.pool.ph, draft.pool.dureza);
+    const touched = ['cloro','ph','alcal','dureza'].some((k) => draft.pool[k] !== '');
+    if (!refVolume() && touched){
       box.innerHTML = `<div class="alert warn">${icon('alert')}<span>Cadastre a litragem do sítio para calcular a dosagem automaticamente.</span></div>`;
     } else if (recs.length){
       box.innerHTML = `<div class="alert warn"><ul>${recs.map((r) => `<li>${icon('droplet')}<span>${esc(r.text)}</span></li>`).join('')}</ul></div>`;
     } else if (touched){
       box.innerHTML = `<div class="alert ok">${icon('check')}<span>Parâmetros dentro da faixa ideal. Nenhuma dosagem necessária.</span></div>`;
-    } else box.innerHTML = '';
+    } else {
+      box.innerHTML = '';
+    }
   }
+
   function refreshSiteInfo(){
-    $('#volChip').textContent = volLabel();
-    $('#siteQuick').innerHTML = quickChips(curSite());
+    const vc = $('#volChip'); if (vc) vc.textContent = volLabel();
+    const sq = $('#siteQuick'); if (sq) sq.innerHTML = quickChips(curSite());
   }
+
   function renderThumbs(slot, sec, kind){
     const wrapEl = slot.querySelector('[data-thumbs]');
     wrapEl.innerHTML = draft[sec].photos[kind].map((d, i) => `
-      <figure class="thumb"><img src="${d}" alt=""><button type="button" class="rm" data-i="${i}">${icon('x')}</button></figure>`).join('');
+      <figure class="thumb">
+        <img src="${d}" alt="">
+        <button type="button" class="rm" data-i="${i}">${icon('x')}</button>
+      </figure>`).join('');
     $$('.rm', wrapEl).forEach((b) => b.onclick = () => {
       draft[sec].photos[kind].splice(+b.dataset.i, 1);
       renderThumbs(slot, sec, kind);
     });
   }
 
+  /* ---- Bindings ---- */
   $('#selSite').onchange = (e) => { draft.siteId = e.target.value; refreshSiteInfo(); renderRecs(); };
-  $('#inspDate').onchange = (e) => draft.dateISO = e.target.value;
+  $('#inspDate').onchange = (e) => { draft.dateISO = e.target.value; };
+
   $$('[data-toggle]').forEach((sw) => sw.onchange = (e) => {
     const key = e.target.dataset.toggle;
     draft[key].active = e.target.checked;
@@ -677,75 +831,100 @@ Views.inspection = async ({ siteId, reportId } = {}) => {
     card.classList.toggle('off', !e.target.checked);
     card.classList.toggle('on', e.target.checked);
   });
-  $$('[data-meas]').forEach((i) => i.oninput = (e) => { draft.pool[e.target.dataset.meas] = e.target.value; renderRecs(); });
+
+  $$('[data-meas]').forEach((i) => i.oninput = (e) => {
+    draft.pool[e.target.dataset.meas] = e.target.value;
+    renderRecs();
+  });
+
   $$('.chk input').forEach((c) => c.onchange = (e) => {
     draft[e.target.dataset.sec].tasks[e.target.dataset.key] = e.target.checked;
   });
-  $('#gardenNotes').addEventListener('input', (e) => draft.garden.notes = e.target.value);
-  $('#genNotes').addEventListener('input', (e) => draft.generalNotes = e.target.value);
-  $$('.cam').forEach((b) => b.onclick = () => b.closest('.photo-slot').querySelector('[data-file]').click());
+
+  $('#gardenNotes').addEventListener('input', (e) => { draft.garden.notes = e.target.value; });
+  $('#genNotes').addEventListener('input', (e) => { draft.generalNotes = e.target.value; });
+
+  $$('.cam').forEach((b) => b.onclick = () =>
+    b.closest('.photo-slot').querySelector('[data-file]').click());
+
   $$('[data-file]').forEach((inp) => inp.onchange = async (e) => {
     const slot = inp.closest('.photo-slot');
     const sec = slot.dataset.sec, kind = slot.dataset.kind;
-    const files = [...inp.files]; inp.value = '';
-    for (const fLe of files){
+    const files = [...inp.files];
+    inp.value = '';
+    for (const file of files){
       if (draft[sec].photos[kind].length >= MAX_PHOTOS){
         toast(`Máximo de ${MAX_PHOTOS} fotos por campo.`, 'warn');
         break;
       }
       try {
-        /* UMA foto por vez → pico de memória controlado */
-        draft[sec].photos[kind].push(await compressImage(fLe));
+        draft[sec].photos[kind].push(await compressImage(file)); /* 1 por vez */
         renderThumbs(slot, sec, kind);
       } catch (_){
-        toast('Não foi possível processar esta imagem (muito grande?). Tente pela galeria.', 'warn', 3600);
+        toast('Não foi possível processar esta imagem. Tente pela galeria.', 'warn', 3600);
       }
     }
   });
-  $('#finish').onclick = finalizar;
 
+  $('#finish').onclick = finalizar;
   refreshSiteInfo();
   renderRecs();
+  $$('.photo-slot').forEach((slot) =>
+    renderThumbs(slot, slot.dataset.sec, slot.dataset.kind));
 
+  /* ---- Finalização: salva → gera PDF → persiste o PDF ---- */
   const finishHTML = $('#finish').innerHTML;
+
   async function finalizar(){
     if (!draft.siteId) return toast('Selecione o sítio.', 'warn');
     const active = ['pool', 'site', 'garden'].filter((k) => draft[k].active);
     if (!active.length) return toast('Ative pelo menos uma seção da vistoria.', 'warn');
 
     const s0 = curSite();
-    /* Fallback caso o sítio original tenha sido excluído */
+    /* Fallback: sítio original excluído → usa dados do próprio relatório */
     const site = s0 || {
       id: draft.siteId,
-      siteName: (editSource && editSource.siteName) || 'Sítio',
-      ownerName: (editSource && editSource.ownerName) || '',
-      volume: (editSource && editSource.pool && editSource.pool.volume) || 0
+      siteName: g(editSource, 'siteName', 'Sítio'),
+      ownerName: g(editSource, 'ownerName', ''),
+      phone: '', address: '',
+      volume: g(editSource && editSource.pool, 'volume', 0)
     };
     const vol = site.volume || 0;
 
     const btn = $('#finish');
     btn.disabled = true;
     btn.innerHTML = '<span class="spin"></span> Salvando…';
+
     try {
-      /* Mantém id/código ao editar; cria novos ao concluir */
-      const report = editSource ? { ...editSource } : { id: uid(), code: String(Date.now()).slice(-6), createdAt: Date.now() };
+      /* Ao editar: preserva id/código. Ao concluir: novos. */
+      const report = editSource
+        ? { ...editSource }
+        : { id: uid(), code: String(Date.now()).slice(-6), createdAt: Date.now() };
+
       Object.assign(report, {
-        siteId: site.id, siteName: site.siteName, ownerName: site.ownerName,
+        siteId: site.id,
+        siteName: site.siteName,
+        ownerName: site.ownerName,
         dateISO: draft.dateISO + 'T' + new Date().toTimeString().slice(0, 5),
         sections: active,
-        pool: { ...draft.pool, volume: vol, recs: computeRecs(vol, draft.pool.cloro, draft.pool.ph, draft.pool.dureza) },
-        site: draft.site, garden: draft.garden,
+        pool: Object.assign({}, draft.pool, {
+          volume: vol,
+          recs: computeRecs(vol, draft.pool.cloro, draft.pool.ph, draft.pool.dureza)
+        }),
+        site: draft.site,
+        garden: draft.garden,
         generalNotes: draft.generalNotes,
         synced: false
       });
       if (editSource) report.editedAt = Date.now();
-      delete report.pdfBase64; /* será regenerado */
+      delete report.pdfBase64; /* será regenerado abaixo */
 
-      /* PERSISTÊNCIA: salva o relatório imediatamente (IndexedDB) */
+      /* PERSISTÊNCIA 1/2: o relatório é salvo ANTES do PDF —
+         mesmo se a geração falhar, nada se perde em campo. */
       await DB.put('reports', report);
 
-      /* Gera o PDF e guarda como Base64 — se falhar, o relatório
-         já está salvo e dá para tentar de novo na tela dele. */
+      /* PERSISTÊNCIA 2/2: PDF (fotos Base64 → JPEG embutido)
+         gerado e guardado como string Base64. */
       let pdfOk = true;
       try {
         btn.innerHTML = '<span class="spin"></span> Gerando PDF…';
@@ -754,23 +933,24 @@ Views.inspection = async ({ siteId, reportId } = {}) => {
         await DB.put('reports', report);
       } catch (err){
         pdfOk = false;
-        console.error('Falha no PDF:', err);
+        console.error('Falha na geração do PDF:', err);
       }
 
-      toast(pdfOk ? 'Relatório salvo com PDF.' : 'Relatório salvo. O PDF pode ser gerado na tela dele.', pdfOk ? 'ok' : 'warn', 3600);
+      toast(pdfOk ? 'Relatório salvo com PDF.' : 'Relatório salvo. Gere o PDF na tela dele.', pdfOk ? 'ok' : 'warn', 3600);
       location.hash = '#/relatorio/' + report.id;
     } catch (err){
       console.error(err);
-      toast('Erro ao salvar: ' + (err && err.message ? err.message : 'desconhecido'), 'warn', 4200);
+      toast('Erro ao salvar: ' + ((err && err.message) || 'desconhecido'), 'warn', 4200);
       btn.disabled = false;
       btn.innerHTML = finishHTML;
     }
   }
 };
 
-/* ---------- HISTÓRICO ---------- */
+/* ---------- 11.5 HISTÓRICO ---------- */
 Views.history = async () => {
-  const reports = (await DB.all('reports')).sort((a, b) => b.createdAt - a.createdAt);
+  const reports = (await DB.all('reports')).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+
   App.el.innerHTML = topbar('Histórico de Relatórios', '#/') + `
   <main class="view container">
     <div class="list">
@@ -778,18 +958,23 @@ Views.history = async () => {
         <div class="item rep" data-id="${r.id}">
           <span class="item-ic">${icon('file')}</span>
           <div class="item-tx">
-            <strong>${esc(r.siteName)}</strong>
-            <span>${new Date(r.dateISO).toLocaleDateString('pt-BR')} • ${r.sections.map(labelSec).join(' + ')}${r.editedAt ? ' • editado' : ''}</span>
+            <strong>${esc(r.siteName || 'Relatório')}</strong>
+            <span>${fmtDateBR(r.dateISO)} • ${(r.sections || []).map(labelSec).join(' + ')}${r.editedAt ? ' • editado' : ''}</span>
           </div>
-          <span class="sync-dot ${r.synced ? 'ok' : 'pend'}" title="${r.synced ? 'Sincronizado' : 'Pendente'}"></span>
+          <span class="sync-dot ${r.synced ? 'ok' : 'pend'}" title="${r.synced ? 'Sincronizado' : 'Pendente de sincronização'}"></span>
           <button class="del" aria-label="Excluir">${icon('trash')}</button>
         </div>`).join('')
       : emptyState('file', 'Nenhuma vistoria registrada', 'Os relatórios gerados aparecem aqui — mesmo sem internet.')}
     </div>
   </main>`;
+
   $$('.item.rep').forEach((el) => {
-    el.onclick = (e) => { if (e.target.closest('.del')) return; location.hash = '#/relatorio/' + el.dataset.id; };
+    el.onclick = (e) => {
+      if (e.target.closest('.del')) return;
+      location.hash = '#/relatorio/' + el.dataset.id;
+    };
   });
+
   $$('.item.rep .del').forEach((b) => b.onclick = async (e) => {
     e.stopPropagation();
     const id = b.closest('.item').dataset.id;
@@ -801,30 +986,42 @@ Views.history = async () => {
   });
 };
 
-/* ---------- RELATÓRIO GERADO (PDF garantido + EDITAR) ---------- */
+/* ---------- 11.6 RELATÓRIO GERADO (PDF + compartilhar + editar) ---------- */
+
+/* Garante que exista PDF: regenera sob demanda se necessário */
 async function ensurePdf(r){
   if (r.pdfBase64) return b64ToBlob(r.pdfBase64);
-  const site = (await DB.get('sites', r.siteId)) || { siteName: r.siteName, ownerName: r.ownerName, volume: (r.pool && r.pool.volume) || 0 };
+  const site = (await DB.get('sites', r.siteId)) || {
+    siteName: r.siteName, ownerName: r.ownerName,
+    volume: g(r.pool, 'volume', 0)
+  };
   const st = await getSettings();
   const blob = await ReportPDF.build(r, site, st);
   r.pdfBase64 = await blobToB64(blob);
   await DB.put('reports', r);
   return blob;
 }
-function pdfFileName(r){
+
+const pdfFileName = (r) => {
   const safe = String(r.siteName || 'relatorio').replace(/\s+/g, '-').replace(/[^\w-]/g, '');
   return `NEGRETS-MASTER_${safe}_${String(r.dateISO).slice(0, 10)}.pdf`;
-}
+};
+
+/* WEB SHARE API — envia o PDF direto ao WhatsApp/e-mail do cliente */
 async function shareReport(r){
   try {
     const blob = await ensurePdf(r);
     const file = new File([blob], pdfFileName(r), { type: 'application/pdf' });
     if (navigator.canShare && navigator.canShare({ files: [file] })){
-      await navigator.share({ files: [file], title: 'Relatório ' + r.siteName, text: 'Segue o relatório de serviços.' });
+      await navigator.share({
+        files: [file],
+        title: 'Relatório ' + (r.siteName || ''),
+        text: 'Segue o relatório de serviços.'
+      });
     } else {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
-      a.href = url; a.download = file.name; a.click();
+      a.href = url; a.download = pdfFileName(r); a.click();
       setTimeout(() => URL.revokeObjectURL(url), 4000);
       toast('Compartilhamento nativo indisponível — PDF baixado.', 'info');
     }
@@ -832,17 +1029,20 @@ async function shareReport(r){
     if (e && e.name !== 'AbortError') toast('Não foi possível compartilhar.', 'warn');
   }
 }
+
 Views.reportView = async ({ id }) => {
   const r = await DB.get('reports', id);
   if (!r){ location.hash = '#/historico'; return; }
 
   const photoCount = ['pool', 'site', 'garden']
     .filter((k) => r[k] && r[k].active)
-    .reduce((acc, k) => acc + ((r[k].photos && r[k].photos.before.length) || 0) + ((r[k].photos && r[k].photos.after.length) || 0), 0);
+    .reduce((acc, k) =>
+      acc + g(r[k].photos, 'before', []).length + g(r[k].photos, 'after', []).length, 0);
 
   const rows = [];
   if (r.pool && r.pool.active){
-    rows.push(['pH / Cloro / Alc. / Dureza', [r.pool.ph || '—', r.pool.cloro || '—', r.pool.alcal || '—', r.pool.dureza || '—'].join('  /  ')]);
+    rows.push(['pH / Cloro / Alc. / Dureza',
+      [r.pool.ph || '—', r.pool.cloro || '—', r.pool.alcal || '—', r.pool.dureza || '—'].join('  /  ')]);
     const done = ReportPDF.TASKS.pool.filter(([k]) => r.pool.tasks && r.pool.tasks[k]).map(([, l]) => l);
     rows.push(['Tarefas da piscina', done.length ? done.join(', ') : '—']);
   }
@@ -855,7 +1055,7 @@ Views.reportView = async ({ id }) => {
     rows.push(['Roçada', done.length ? done.join(', ') : '—']);
   }
 
-  App.el.innerHTML = topbar('Relatório Nº ' + r.code, '#/historico') + `
+  App.el.innerHTML = topbar('Relatório Nº ' + (r.code || '—'), '#/historico') + `
   <main class="view container">
     ${!r.pdfBase64 ? `
     <div class="alert warn">${icon('alert')}<span>PDF ainda não gerado para este relatório.</span>
@@ -864,8 +1064,8 @@ Views.reportView = async ({ id }) => {
     <section class="card done-card">
       <span class="done-check">${checkSVG}</span>
       <h2>Relatório pronto!</h2>
-      <p>${esc(r.siteName)} • ${dataBR(String(r.dateISO).slice(0, 10))}${r.editedAt ? ' • <b>editado</b>' : ''}</p>
-      <div class="chips">${r.sections.map((k) => `<span>${labelSec(k)}</span>`).join('')}</div>
+      <p>${esc(r.siteName || '')} • ${fmtDateBR(r.dateISO)}${r.editedAt ? ' • <b>editado</b>' : ''}</p>
+      <div class="chips">${(r.sections || []).map((k) => `<span>${labelSec(k)}</span>`).join('')}</div>
     </section>
 
     <button class="btn primary block big" id="shareBtn">${icon('share')} Compartilhar PDF (WhatsApp)</button>
@@ -888,25 +1088,37 @@ Views.reportView = async ({ id }) => {
     const old = btn.innerHTML;
     btn.disabled = true;
     btn.innerHTML = '<span class="spin"></span> Aguarde…';
-    try { await fn(); } catch (e){ console.error(e); toast('Falha no PDF: ' + (e && e.message ? e.message : 'erro'), 'warn', 4000); }
-    btn.disabled = false; btn.innerHTML = old;
+    try { await fn(); }
+    catch (e){
+      console.error(e);
+      toast('Falha no PDF: ' + ((e && e.message) || 'erro'), 'warn', 4000);
+    }
+    btn.disabled = false;
+    btn.innerHTML = old;
   };
 
   $('#shareBtn').onclick = (e) => busy(e.currentTarget, () => shareReport(r));
-  $('#openBtn').onclick  = (e) => busy(e.currentTarget, async () => {
+
+  $('#openBtn').onclick = (e) => busy(e.currentTarget, async () => {
     const url = URL.createObjectURL(await ensurePdf(r));
     const w = window.open(url, '_blank');
-    if (!w){ const a = document.createElement('a'); a.href = url; a.target = '_blank'; a.click(); }
+    if (!w){
+      const a = document.createElement('a');
+      a.href = url; a.target = '_blank'; a.click();
+    }
   });
-  $('#downBtn').onclick  = (e) => busy(e.currentTarget, async () => {
+
+  $('#downBtn').onclick = (e) => busy(e.currentTarget, async () => {
     const blob = await ensurePdf(r);
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url; a.download = pdfFileName(r); a.click();
     setTimeout(() => URL.revokeObjectURL(url), 4000);
   });
+
   $('#editBtn').onclick  = () => location.hash = '#/editar/' + r.id;
   $('#againBtn').onclick = () => location.hash = '#/vistoria';
+
   const gp = $('#genPdfBtn');
   if (gp) gp.onclick = (e) => busy(e.currentTarget, async () => {
     await ensurePdf(r);
@@ -915,9 +1127,10 @@ Views.reportView = async ({ id }) => {
   });
 };
 
-/* ---------- AJUSTES ---------- */
+/* ---------- 11.7 AJUSTES DA EMPRESA ---------- */
 Views.settings = async () => {
   const st = await getSettings();
+
   App.el.innerHTML = topbar('Ajustes da Empresa', '#/') + `
   <main class="view container">
     <form id="setForm" class="card form">
@@ -931,6 +1144,7 @@ Views.settings = async () => {
       </div>
       <button class="btn primary block" type="submit">${icon('check')} Salvar Ajustes</button>
     </form>
+
     <section class="card form">
       <h2 style="font-size:.74rem;letter-spacing:.12em;color:var(--pool);text-transform:uppercase;font-weight:800">Aplicativo</h2>
       <button class="btn ghost block" id="installBtn" hidden>${icon('download')} Instalar na tela inicial</button>
@@ -945,6 +1159,7 @@ Views.settings = async () => {
     await saveSettings(Object.fromEntries(new FormData(e.target).entries()));
     toast('Ajustes salvos.');
   };
+
   const ib = $('#installBtn');
   if (deferredPrompt){
     ib.hidden = false;
@@ -952,28 +1167,83 @@ Views.settings = async () => {
       deferredPrompt.prompt();
       const c = await deferredPrompt.userChoice;
       if (c.outcome === 'accepted') toast('Aplicativo instalado!');
-      deferredPrompt = null; ib.hidden = true;
+      deferredPrompt = null;
+      ib.hidden = true;
     };
   } else if (/iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream){
     $('#iosHint').hidden = false;
   }
+
   $('#wipeBtn').onclick = async () => {
-    if (!await confirmDlg({ title: 'Apagar todos os dados?', text: 'Sítios, relatórios e ajustes serão removidos definitivamente.', okLabel: 'Apagar tudo', danger: true })) return;
+    if (!await confirmDlg({ title: 'Apagar todos os dados?', text: 'Sítios, relatórios e ajustes deste aparelho serão removidos definitivamente.', okLabel: 'Apagar tudo', danger: true })) return;
     await Promise.all([DB.clear('sites'), DB.clear('reports'), DB.clear('settings')]);
     toast('Dados apagados.');
     location.hash = '#/';
   };
 };
 
-/* ================= BOOT ================= */
-async function init(){
-  App.el = $('#app');
-  $$('[data-ic]').forEach((el) => { el.outerHTML = icon(el.dataset.ic); });
-  await DB.open();
-  App.render();
-  if ('serviceWorker' in navigator){
-    window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(console.warn));
+/* =========================================================
+   12. MIGRAÇÃO — normaliza relatórios antigos/parciais
+   -----------------------------------------------------------
+   Roda UMA vez no boot: garante que todo relatório tenha
+   tasks/photos/sections/dureza no formato atual, e converte
+   o formato antigo (pdfBlob) para o novo (pdfBase64). Assim
+   nenhuma tela quebra, independentemente da idade do dado.
+   ========================================================= */
+async function normalizeReports(){
+  const reports = await DB.all('reports');
+  for (const r of reports){
+    let changed = false;
+
+    const fixSec = (name) => {
+      if (!r[name] || typeof r[name] !== 'object'){
+        r[name] = { active: false, tasks: {}, photos: { before: [], after: [] } };
+        changed = true;
+        return;
+      }
+      if (!r[name].tasks || typeof r[name].tasks !== 'object'){ r[name].tasks = {}; changed = true; }
+      if (!r[name].photos || typeof r[name].photos !== 'object'){
+        r[name].photos = { before: [], after: [] }; changed = true;
+      } else {
+        if (!Array.isArray(r[name].photos.before)){ r[name].photos.before = []; changed = true; }
+        if (!Array.isArray(r[name].photos.after)){  r[name].photos.after  = []; changed = true; }
+      }
+    };
+    fixSec('pool'); fixSec('site'); fixSec('garden');
+
+    if (r.pool && typeof r.pool.dureza === 'undefined'){ r.pool.dureza = ''; changed = true; }
+    if (!Array.isArray(r.sections)){
+      r.sections = ['pool', 'site', 'garden'].filter((k) => r[k] && r[k].active);
+      changed = true;
+    }
+    if (r.pdfBlob){ delete r.pdfBlob; changed = true; } /* formato antigo */
+    if (changed) await DB.put('reports', r);
   }
 }
-window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); deferredPrompt = e; });
+
+/* =========================================================
+   13. BOOT
+   ========================================================= */
+async function init(){
+  App.el = $('#app');
+
+  /* Ícones da barra de navegação (index.html usa data-ic) */
+  $$('[data-ic]').forEach((el) => { el.outerHTML = icon(el.dataset.ic); });
+
+  await DB.open();
+  await normalizeReports(); /* blindagem contra dados antigos */
+  App.render();
+
+  /* Service Worker → instalação + modo offline */
+  if ('serviceWorker' in navigator){
+    window.addEventListener('load', () =>
+      navigator.serviceWorker.register('./sw.js').catch(console.warn));
+  }
+}
+
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  deferredPrompt = e;
+});
+window.addEventListener('appinstalled', () => toast('NEGRET&rsquo;S MASTER instalado!'));
 document.addEventListener('DOMContentLoaded', init);
