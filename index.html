@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>NEGRET'S MASTER — Piscineiro & Limpeza de Sítio</title>
+  <meta name="description" content="Vistoria de piscinas, limpeza de sítio e relatórios em PDF. 100% offline.">
+  <meta name="theme-color" content="#0B2A4A">
+
+  <!-- ===== PWA / iOS ===== -->
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon-180.png">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="NEGRET'S MASTER">
+
+  <!-- Fonte (cacheada pelo Service Worker após a 1ª visita) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <div id="app"></div>
+
+  <!-- Navegação inferior fixa (com FAB central de vistoria) -->
+  <nav class="bnav" aria-label="Navegação principal">
+    <a href="#/" data-nav="dashboard"><i data-ic="home"></i><span>Início</span></a>
+    <a href="#/historico" data-nav="history"><i data-ic="file"></i><span>Histórico</span></a>
+    <a href="#/vistoria" class="fab" aria-label="Nova Vistoria"><i data-ic="plus"></i></a>
+    <a href="#/sites" data-nav="sites"><i data-ic="pin"></i><span>Sítios</span></a>
+    <a href="#/ajustes" data-nav="settings"><i data-ic="gear"></i><span>Ajustes</span></a>
+  </nav>
+
+  <div id="toasts" aria-live="polite"></div>
+  <noscript>Este aplicativo precisa de JavaScript habilitado.</noscript>
+
+  <script src="js/db.js"></script>
+  <script src="js/pdf.js"></script>
+  <script src="js/report.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
