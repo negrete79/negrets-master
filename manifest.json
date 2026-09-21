@@ -1,0 +1,25 @@
+{
+  "name": "NEGRET'S MASTER — Piscineiro e Limpeza de Sítio",
+  "short_name": "NEGRET'S MASTER",
+  "description": "Vistorias de piscina, limpeza de sítio e relatórios em PDF. Funciona 100% offline.",
+  "id": "negrets-master",
+  "lang": "pt-BR",
+  "dir": "ltr",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0B2A4A",
+  "theme_color": "#0B2A4A",
+  "categories": ["business", "productivity", "utilities"],
+  "icons": [
+    { "src": "icons/icon.svg",  "sizes": "any",     "type": "image/svg+xml", "purpose": "any" },
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Nova Vistoria", "url": "./index.html#/vistoria" },
+    { "name": "Histórico",     "url": "./index.html#/historico" }
+  ]
+}
