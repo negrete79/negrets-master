@@ -1,14 +1,15 @@
 /* =========================================================
-   app.js — SPA (hash router), telas, cálculos e sincronia.
+   app.js — v2
+   • Fotos: câmera OU galeria, compressão leve (createImageBitmap),
+     1 por vez, limite por seção → não estoura a memória.
+   • Novo parâmetro: DUREZA CÁLCICA (200–400 ppm).
+   • Relatório EDITÁVEL: #/editar/<id> reabre tudo preenchido.
+   • PDF salvo como string Base64 no IndexedDB (mais compatível).
    ========================================================= */
 'use strict';
 
-/* ================= CONFIG ================= */
 const CONFIG = {
-  /* PONTO DE INTEGRAÇÃO FUTURA: cole aqui a URL de um backend/
-     Google Apps Script para enviar os relatórios à nuvem.
-     Vazio = modo 100% local (nada sai do aparelho). */
-  SYNC_ENDPOINT: ''
+  SYNC_ENDPOINT: '' /* URL futura de nuvem; vazio = 100% local */
 };
 
 /* ================= UTILITÁRIOS ================= */
@@ -22,7 +23,20 @@ const hojeISO = () => { const d = new Date(); d.setMinutes(d.getMinutes() - d.ge
 const dataBR  = (iso) => new Date(iso + 'T12:00:00').toLocaleDateString('pt-BR');
 const saudacao = () => { const h = new Date().getHours(); return h < 12 ? 'Bom dia' : h < 18 ? 'Boa tarde' : 'Boa noite'; };
 
-/* ================= ÍCONES (SVG inline, estilo traço) ================= */
+/* Base64 ⇄ Blob (PDF agora é salvo como texto — compatível com qualquer aparelho) */
+const blobToB64 = (blob) => new Promise((res, rej) => {
+  const fr = new FileReader();
+  fr.onload = () => res(String(fr.result).split(',')[1]);
+  fr.onerror = rej;
+  fr.readAsDataURL(blob);
+});
+function b64ToBlob(b64){
+  const bin = atob(b64), u8 = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  return new Blob([u8], { type: 'application/pdf' });
+}
+
+/* ================= ÍCONES ================= */
 const ICONS = {
   home:'<path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>',
   file:'<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>',
@@ -32,6 +46,7 @@ const ICONS = {
   plus:'<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
   clipboard:'<path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>',
   camera:'<path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/>',
+  image:'<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>',
   check:'<polyline points="20 6 9 17 4 12"/>',
   x:'<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
   back:'<polyline points="15 18 9 12 15 6"/>',
@@ -44,7 +59,8 @@ const ICONS = {
   wifioff:'<line x1="1" y1="1" x2="23" y2="23"/><path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.55"/><path d="M5 12.55a10.94 10.94 0 0 1 5.17-2.39"/><path d="M10.71 5.05A16 16 0 0 1 22.58 9"/><path d="M1.42 9a15.91 15.91 0 0 1 4.7-2.88"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/>',
   sync:'<polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>',
   user:'<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
-  phone:'<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>'
+  phone:'<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>',
+  edit:'<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4z"/>'
 };
 const icon = (name) => `<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ''}</svg>`;
 
@@ -88,7 +104,7 @@ function confirmDlg({ title, text, okLabel = 'Confirmar', danger = false }){
   });
 }
 
-/* ================= AJUSTES / ESTADO ================= */
+/* ================= AJUSTES ================= */
 const DEFAULT_SETTINGS = { companyName: "NEGRET'S MASTER", tagline: 'Piscinas & Limpeza de Sítio', phone: '', email: '', technician: '' };
 async function getSettings(){
   const rec = await DB.get('settings', 'company');
@@ -98,25 +114,24 @@ const saveSettings = (v) => DB.put('settings', { key: 'company', value: v });
 
 let deferredPrompt = null;
 
-/* ================= SINCRONIZAÇÃO (indicador online/offline) ================= */
+/* ================= SINCRONIZAÇÃO ================= */
 const Sync = {
   async pending(){ return (await DB.all('reports')).filter((r) => !r.synced).length; },
   async syncNow(){
     if (!navigator.onLine) return toast('Sem internet agora — seus dados continuam salvos no aparelho.', 'warn');
     const pend = (await DB.all('reports')).filter((r) => !r.synced);
     if (!pend.length) return toast('Tudo sincronizado.');
-    if (!CONFIG.SYNC_ENDPOINT){
+    if (!CONFIG.SYNC_ENDPOINT)
       return toast(pend.length + ' relatório(s) salvos localmente. Configure SYNC_ENDPOINT para enviar à nuvem.', 'info', 3800);
-    }
     let ok = 0;
     for (const r of pend){
       try {
-        const { pdfBlob, ...json } = r; /* Blob não vai no JSON */
+        const { pdfBase64, ...json } = r;
         const res = await fetch(CONFIG.SYNC_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(json) });
         if (res.ok){ r.synced = true; await DB.put('reports', r); ok++; }
       } catch (_) {}
     }
-    toast(ok === pend.length ? ok + ' relatório(s) enviados.' : ok + '/' + pend.length + ' enviados — tente novamente.', ok ? 'ok' : 'warn');
+    toast(ok === pend.length ? ok + ' relatório(s) enviados.' : ok + '/' + pend.length + ' enviados.', ok ? 'ok' : 'warn');
     updateNetUI();
   }
 };
@@ -144,26 +159,59 @@ const emptyState = (ic, title, text, href, btn) => `
 
 const labelSec = (k) => ({ pool: 'Piscina', site: 'Sítio', garden: 'Roçada' }[k] || k);
 
-/* Comprime a foto antes de salvar (Base64 JPEG) — economiza IndexedDB */
-function compressImage(file, maxDim = 1280, quality = 0.72){
+/* =========================================================
+   FOTOS — pipeline leve (v2):
+   1) createImageBitmap (decodifica direto na GPU, menos RAM)
+   2) fallback <img> + canvas
+   3) máximo 1280px / qualidade 0.65 / uma foto por vez
+   Sem o atributo "capture" → o Android/iOS oferece CÂMERA e
+   GALERIA do dispositivo naturalmente.
+   ========================================================= */
+const PHOTO_MAX_DIM = 1280, PHOTO_QUALITY = 0.65, MAX_PHOTOS = 8;
+
+function legacyCompress(file){
   return new Promise((resolve, reject) => {
     const img = new Image();
     const url = URL.createObjectURL(file);
     img.onload = () => {
-      const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
-      const c = document.createElement('canvas');
-      c.width = Math.round(img.width * scale);
-      c.height = Math.round(img.height * scale);
-      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
-      URL.revokeObjectURL(url);
-      resolve(c.toDataURL('image/jpeg', quality));
+      try {
+        const scale = Math.min(1, PHOTO_MAX_DIM / Math.max(img.width, img.height));
+        const c = document.createElement('canvas');
+        c.width = Math.max(1, Math.round(img.width * scale));
+        c.height = Math.max(1, Math.round(img.height * scale));
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+        URL.revokeObjectURL(url);
+        const out = c.toDataURL('image/jpeg', PHOTO_QUALITY);
+        c.width = c.height = 0; /* libera memória do canvas */
+        resolve(out);
+      } catch (e){ URL.revokeObjectURL(url); reject(e); }
     };
-    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('img')); };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('decode')); };
     img.src = url;
   });
 }
+async function compressImage(file){
+  let bmp = null;
+  if (window.createImageBitmap){
+    try { bmp = await createImageBitmap(file, { imageOrientation: 'from-image' }); }
+    catch (_) { try { bmp = await createImageBitmap(file); } catch (_) {} }
+  }
+  if (bmp){
+    try {
+      const scale = Math.min(1, PHOTO_MAX_DIM / Math.max(bmp.width, bmp.height));
+      const c = document.createElement('canvas');
+      c.width = Math.max(1, Math.round(bmp.width * scale));
+      c.height = Math.max(1, Math.round(bmp.height * scale));
+      c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+      if (bmp.close) bmp.close(); /* LIBERA a imagem original da memória */
+      const out = c.toDataURL('image/jpeg', PHOTO_QUALITY);
+      c.width = c.height = 0;
+      return out;
+    } catch (e){ if (bmp.close) bmp.close(); }
+  }
+  return legacyCompress(file); /* rede de segurança */
+}
 
-/* Contador animado (litragem) */
 function animateNumber(el, to, dur = 550){
   if (!el) return;
   const from = Number(el.dataset.v || 0);
@@ -178,9 +226,9 @@ function animateNumber(el, to, dur = 550){
 }
 
 /* =========================================================
-   CÁLCULO AUTOMÁTICO DE LITRAGEM (requisito do sítio/piscina)
-   Retangular: Comprimento × Largura × Prof. Média × 1000
-   Redonda:    Diâmetro × Diâmetro × Prof. Média × 0,785 × 1000
+   CÁLCULO AUTOMÁTICO DE LITRAGEM
+   Retangular: C × L × P × 1000
+   Redonda:    D × D × P × 0,785 × 1000
    ========================================================= */
 function calcVolume(shape, { length = 0, width = 0, diameter = 0, depth = 0 } = {}){
   const C = parseFloat(length) || 0, L = parseFloat(width) || 0,
@@ -192,15 +240,18 @@ function calcVolume(shape, { length = 0, width = 0, diameter = 0, depth = 0 } = 
 }
 
 /* =========================================================
-   LÓGICA DE RECOMENDAÇÃO AUTOMÁTICA (requisito da Aba A)
-   Cloro < 1,0 ppm → gramas de cloro = Volume × 0,004
-   pH    > 7,6     → ml de redutor  = Volume × 0,007
+   RECOMENDAÇÕES AUTOMÁTICAS (agora com DUREZA CÁLCICA)
+   Cloro < 1,0 ppm → Volume × 0,004 g de cloro
+   pH    > 7,6     → Volume × 0,007 ml de redutor
+   Dureza <200 / >400 ppm → orientação de correção
    ========================================================= */
-function computeRecs(vol, cloro, ph){
+function computeRecs(vol, cloro, ph, dureza){
   const recs = [];
-  const cl = parseFloat(cloro), p = parseFloat(ph);
+  const cl = parseFloat(cloro), p = parseFloat(ph), dz = parseFloat(dureza);
   if (vol > 0 && !isNaN(cl) && cl < 1.0) recs.push({ kind: 'cloro', text: `Adicionar ${fmt1.format(vol * 0.004)} g de Cloro` });
   if (vol > 0 && !isNaN(p)  && p  > 7.6) recs.push({ kind: 'ph',    text: `Adicionar ${fmt1.format(vol * 0.007)} ml de Redutor de pH` });
+  if (!isNaN(dz) && dz < 200) recs.push({ kind: 'dureza', text: `Dureza cálcica baixa (${fmt0.format(dz)} ppm) — aplicar cloreto de cálcio conforme tabela do fabricante` });
+  if (!isNaN(dz) && dz > 400) recs.push({ kind: 'dureza', text: `Dureza cálcica alta (${fmt0.format(dz)} ppm) — diluir com água nova ou usar removedor de dureza` });
   return recs;
 }
 
@@ -214,6 +265,7 @@ const App = {
     { re: /^#\/site\/([\w-]+)$/,             view: 'siteForm',  m: (m) => ({ id: m[1] }) },
     { re: /^#\/vistoria$/,                   view: 'inspection',m: () => ({}) },
     { re: /^#\/vistoria\/([\w-]+)$/,         view: 'inspection',m: (m) => ({ siteId: m[1] }) },
+    { re: /^#\/editar\/([\w-]+)$/,           view: 'inspection',m: (m) => ({ reportId: m[1] }) }, /* NOVO */
     { re: /^#\/historico$/,                  view: 'history',   m: () => ({}) },
     { re: /^#\/relatorio\/([\w-]+)$/,        view: 'reportView',m: (m) => ({ id: m[1] }) },
     { re: /^#\/ajustes$/,                    view: 'settings',  m: () => ({}) }
@@ -227,7 +279,7 @@ const App = {
       if (m){ view = r.view; params = r.m(m); break; }
     }
     try { await Views[view](params); }
-    catch (err){ console.error(err); this.el.innerHTML = topbar('Erro', '#/') + `<main class="view container">${emptyState('alert','Algo deu errado','Tente novamente.')}</main>`; }
+    catch (err){ console.error(err); this.el.innerHTML = topbar('Erro', '#/') + `<main class="view container">${emptyState('alert','Algo deu errado', String(err && err.message || err))}</main>`; }
     updateNav(view);
     window.scrollTo({ top: 0 });
   }
@@ -242,7 +294,7 @@ window.addEventListener('hashchange', () => App.render());
 /* ================= VIEWS ================= */
 const Views = {};
 
-/* ---------- 1. DASHBOARD ---------- */
+/* ---------- DASHBOARD ---------- */
 Views.dashboard = async () => {
   const [settings, sites, reports] = await Promise.all([getSettings(), DB.all('sites'), DB.all('reports')]);
   const pending = reports.filter((r) => !r.synced).length;
@@ -275,18 +327,16 @@ Views.dashboard = async () => {
       </span>
       <span class="pill">COMEÇAR</span>
     </button>
-
     <button class="card act" id="goHistorico">
       <span class="act-ic">${icon('folder')}</span>
       <span class="act-tx">
         <small>RELATÓRIOS CONCLUÍDOS</small>
         <strong>HISTÓRICO PISCINA &amp; SÍTIO</strong>
-        <em>Visualize e envie relatórios finalizados</em>
+        <em>Visualize, edite e envie relatórios</em>
       </span>
       <span class="pill">ACESSAR</span>
       ${pending ? `<span class="bubble">${pending}</span>` : ''}
     </button>
-
     <button class="card act" id="goSites">
       <span class="act-ic">${icon('pin')}</span>
       <span class="act-tx">
@@ -296,17 +346,15 @@ Views.dashboard = async () => {
       </span>
       <span class="pill">GERENCIAR</span>
     </button>
-
     <button class="card act" id="goAjustes">
       <span class="act-ic">${icon('gear')}</span>
       <span class="act-tx">
         <small>CONFIGURAÇÕES</small>
         <strong>AJUSTES GERAIS</strong>
-        <em>Dados da empresa, técnico e preferências de serviço</em>
+        <em>Dados da empresa, técnico e preferências</em>
       </span>
       <span class="pill">EDITAR</span>
     </button>
-
     <section class="sync-strip">
       <div>
         ${icon(navigator.onLine ? 'wifi' : 'wifioff')}
@@ -324,7 +372,7 @@ Views.dashboard = async () => {
   $('#syncNow').onclick     = () => Sync.syncNow();
 };
 
-/* ---------- 2. LISTA DE SÍTIOS ---------- */
+/* ---------- SÍTIOS ---------- */
 Views.sites = async () => {
   const sites = (await DB.all('sites')).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
   App.el.innerHTML = topbar('Sítios & Clientes', '#/') + `
@@ -341,10 +389,9 @@ Views.sites = async () => {
           ${s.volume ? `<span class="vol-chip">${fmt0.format(s.volume)} L</span>` : ''}
           <button class="del" aria-label="Excluir">${icon('trash')}</button>
         </div>`).join('')
-      : emptyState('pin', 'Nenhum sítio cadastrado', 'Cadastre seus clientes para agilizar as vistorias em campo.', '#/site/novo', 'Cadastrar agora')}
+      : emptyState('pin', 'Nenhum sítio cadastrado', 'Cadastre seus clientes para agilizar as vistorias.', '#/site/novo', 'Cadastrar agora')}
     </div>
   </main>`;
-
   $('#newSite').onclick = () => location.hash = '#/site/novo';
   $$('#siteList .item').forEach((el) => {
     el.onclick = (e) => { if (e.target.closest('.del')) return; location.hash = '#/site/' + el.dataset.id; };
@@ -353,14 +400,14 @@ Views.sites = async () => {
     e.stopPropagation();
     const id = b.closest('.item').dataset.id;
     if (await confirmDlg({ title: 'Excluir cadastro?', text: 'Esta ação não pode ser desfeita.', okLabel: 'Excluir', danger: true })){
-      await DB.del('sites', id); /* PERSISTÊNCIA: remoção no IndexedDB */
+      await DB.del('sites', id);
       toast('Cadastro excluído.');
       Views.sites();
     }
   });
 };
 
-/* ---------- 3. CADASTRO DE SÍTIO / PISCINA ---------- */
+/* ---------- CADASTRO DE SÍTIO ---------- */
 Views.siteForm = async ({ id } = {}) => {
   const site = id ? await DB.get('sites', id) : null;
   const f = site ? { ...site } : { poolType: 'fibra', poolShape: 'retangular', length: '', width: '', diameter: '', depth: '' };
@@ -375,7 +422,6 @@ Views.siteForm = async ({ id } = {}) => {
         <label class="field"><span>Telefone / WhatsApp</span><input name="phone" inputmode="tel" value="${esc(f.phone || '')}" placeholder="(44) 99999-0000"></label>
         <label class="field"><span>Endereço</span><input name="address" value="${esc(f.address || '')}" placeholder="Rua, distrito, cidade"></label>
       </div>
-
       <div class="form-sec">
         <h2>Dados da Piscina</h2>
         <span class="field-lbl">Tipo de Piscina</span>
@@ -388,9 +434,7 @@ Views.siteForm = async ({ id } = {}) => {
           <label><input type="radio" name="poolShape" value="retangular" ${f.poolShape !== 'redonda' ? 'checked' : ''}><span>Retangular</span></label>
           <label><input type="radio" name="poolShape" value="redonda" ${f.poolShape === 'redonda' ? 'checked' : ''}><span>Redonda</span></label>
         </div>
-
         <div id="poolFields"></div>
-
         <div class="gauge">
           <div class="tank" aria-hidden="true">
             <div class="tank-water" id="tankWater"><span class="bub b1"></span><span class="bub b2"></span></div>
@@ -403,7 +447,6 @@ Views.siteForm = async ({ id } = {}) => {
           </div>
         </div>
       </div>
-
       <button class="btn primary block" type="submit">${site ? icon('check') + ' Salvar Alterações' : icon('plus') + ' Salvar Sítio'}</button>
     </form>
   </main>`;
@@ -426,7 +469,6 @@ Views.siteForm = async ({ id } = {}) => {
     $$('#poolFields input').forEach((i) => i.addEventListener('input', updateVolume));
     updateVolume();
   }
-
   function currentVolume(){
     const v = (k) => parseFloat(($('#siteForm [name="' + k + '"]') || {}).value) || 0;
     return calcVolume(shape(), { length: v('length'), width: v('width'), diameter: v('diameter'), depth: v('depth') });
@@ -436,7 +478,6 @@ Views.siteForm = async ({ id } = {}) => {
     animateNumber($('#volNum'), Math.round(vol));
     $('#tankWater').style.height = vol > 0 ? (18 + Math.min(82, Math.log10(Math.max(vol, 10)) / 5 * 82)) + '%' : '0%';
   }
-
   $$('#siteForm input[name="poolShape"]').forEach((r) => r.addEventListener('change', renderFields));
   renderFields();
 
@@ -445,8 +486,6 @@ Views.siteForm = async ({ id } = {}) => {
     const data = Object.fromEntries(new FormData(e.target).entries());
     if (!String(data.ownerName || '').trim() || !String(data.siteName || '').trim())
       return toast('Preencha proprietário e nome do sítio.', 'warn');
-
-    /* PERSISTÊNCIA OFFLINE: grava o perfil completo (com litragem) no IndexedDB */
     const rec = {
       id: f.id || uid(),
       ownerName: data.ownerName.trim(), siteName: data.siteName.trim(),
@@ -456,42 +495,71 @@ Views.siteForm = async ({ id } = {}) => {
       volume: Math.round(currentVolume()),
       createdAt: f.createdAt || Date.now(), updatedAt: Date.now()
     };
-    await DB.put('sites', rec);
+    await DB.put('sites', rec); /* PERSISTÊNCIA: IndexedDB */
     toast('Sítio salvo no aparelho.');
     location.hash = '#/sites';
   };
 };
 
-/* ---------- 4. VISTORIA UNIFICADA (Abas A / B / C) ---------- */
-Views.inspection = async ({ siteId } = {}) => {
+/* ---------- VISTORIA (Nova + EDITAR) ---------- */
+Views.inspection = async ({ siteId, reportId } = {}) => {
   const [sites, settings] = await Promise.all([DB.all('sites'), getSettings()]);
   const TASKS = ReportPDF.TASKS;
 
-  if (!sites.length){
+  const editSource = reportId ? await DB.get('reports', reportId) : null;
+
+  if (!sites.length && !editSource){
     App.el.innerHTML = topbar('Nova Vistoria', '#/') + `
-      <main class="view container">
-        ${emptyState('clipboard', 'Cadastre um sítio primeiro', 'A vistoria precisa de um cliente selecionado.', '#/site/novo', 'Cadastrar agora')}
-      </main>`;
+      <main class="view container">${emptyState('clipboard', 'Cadastre um sítio primeiro', 'A vistoria precisa de um cliente selecionado.', '#/site/novo', 'Cadastrar agora')}</main>`;
     return;
   }
 
-  /* Rascunho em memória — persistido no IndexedDB ao finalizar */
+  /* Monta o rascunho — vazio (nova) ou preenchido do relatório (edição) */
+  const g = (o, k, dflt) => (o && o[k] !== undefined && o[k] !== null) ? o[k] : dflt;
+  const taskSet = (src, keys) => { const t = {}; keys.forEach(([k]) => t[k] = !!(src && src.tasks && src.tasks[k])); return t; };
+  const photoSet = (src) => ({
+    before: Array.isArray(g(src && src.photos, 'before', [])) ? [...src.photos.before] : [],
+    after:  Array.isArray(g(src && src.photos, 'after',  [])) ? [...src.photos.after]  : []
+  });
+
   const draft = {
-    siteId: siteId && sites.some((s) => s.id === siteId) ? siteId : sites[0].id,
-    dateISO: hojeISO(),
-    pool:   { active: true,  ph: '', cloro: '', alcal: '', tasks: { aspiracao:false, peneira:false, escovacao:false, filtro:false }, photos: { before: [], after: [] } },
-    site:   { active: false, tasks: { churrasqueira:false, varandas:false, banheiros:false, lixo:false }, photos: { before: [], after: [] } },
-    garden: { active: false, tasks: { entrada:false, piscina:false, pomar:false, campo:false }, notes: '', photos: { before: [], after: [] } },
-    generalNotes: ''
+    siteId: g(editSource, 'siteId', (siteId && sites.some((s) => s.id === siteId)) ? siteId : (sites[0] ? sites[0].id : '')),
+    dateISO: (editSource ? String(editSource.dateISO).slice(0, 10) : hojeISO()),
+    pool: {
+      active: editSource ? !!(editSource.pool && editSource.pool.active) : true,
+      ph: String(g(editSource && editSource.pool, 'ph', '')),
+      cloro: String(g(editSource && editSource.pool, 'cloro', '')),
+      alcal: String(g(editSource && editSource.pool, 'alcal', '')),
+      dureza: String(g(editSource && editSource.pool, 'dureza', '')), /* NOVO */
+      tasks: taskSet(editSource && editSource.pool, TASKS.pool),
+      photos: photoSet(editSource && editSource.pool)
+    },
+    site: {
+      active: editSource ? !!(editSource.site && editSource.site.active) : false,
+      tasks: taskSet(editSource && editSource.site, TASKS.site),
+      photos: photoSet(editSource && editSource.site)
+    },
+    garden: {
+      active: editSource ? !!(editSource.garden && editSource.garden.active) : false,
+      tasks: taskSet(editSource && editSource.garden, TASKS.garden),
+      notes: String(g(editSource && editSource.garden, 'notes', '')),
+      photos: photoSet(editSource && editSource.garden)
+    },
+    generalNotes: String(g(editSource, 'generalNotes', ''))
   };
 
-  const curSite  = () => sites.find((s) => s.id === draft.siteId);
-  const volLabel = () => { const s = curSite(); return s && s.volume ? fmt0.format(s.volume) + ' L' : 'não calculada'; };
+  const curSite = () => sites.find((s) => s.id === draft.siteId);
+  const volLabel = () => {
+    const s = curSite();
+    if (s && s.volume) return fmt0.format(s.volume) + ' L';
+    if (editSource && editSource.pool && editSource.pool.volume) return fmt0.format(editSource.pool.volume) + ' L';
+    return 'não calculada';
+  };
   const quickChips = (s) => !s ? '' : [
     `<span>${icon('user')}${esc(s.ownerName)}</span>`,
     s.phone  ? `<span>${icon('phone')}${esc(s.phone)}</span>` : '',
     s.volume ? `<span>${icon('droplet')}${fmt0.format(s.volume)} L</span>` : ''
-  ].join('');
+  ].filter(Boolean).join('');
 
   const checkGrid = (sec, items) => items.map(([k, lbl]) => `
     <label class="chk">
@@ -499,23 +567,26 @@ Views.inspection = async ({ siteId } = {}) => {
       <span class="box">${icon('check')}</span><span>${lbl}</span>
     </label>`).join('');
 
+  /* SEM "capture": abre câmera OU galeria do dispositivo */
   const photoSlot = (sec, kind, label) => `
     <div class="photo-slot" data-sec="${sec}" data-kind="${kind}">
       <div class="photo-head"><span>${label}</span>
         <button type="button" class="btn small ghost cam">${icon('camera')} ${kind === 'before' ? 'Foto Antes' : 'Foto Depois'}</button>
       </div>
       <div class="thumbs" data-thumbs></div>
-      <input type="file" accept="image/*" capture="environment" multiple hidden data-file>
+      <input type="file" accept="image/*" multiple hidden data-file>
+      <span class="hint">Câmera ou galeria • comprimida automaticamente</span>
     </div>`;
 
   const poolBody = () => `
     <div class="vol-line">${icon('droplet')}<span>Litragem do sítio: <strong id="volChip">${volLabel()}</strong></span></div>
-    <div class="grid3">
-      <label class="field"><span>pH</span><input type="number" step="0.1" min="0" max="14" inputmode="decimal" data-meas="ph" value="${draft.pool.ph}" placeholder="7,4"></label>
-      <label class="field"><span>Cloro (ppm)</span><input type="number" step="0.1" min="0" inputmode="decimal" data-meas="cloro" value="${draft.pool.cloro}" placeholder="1,5"></label>
-      <label class="field"><span>Alcalinidade</span><input type="number" step="1" min="0" inputmode="numeric" data-meas="alcal" value="${draft.pool.alcal}" placeholder="100"></label>
+    <div class="grid2">
+      <label class="field"><span>pH</span><input type="number" step="0.1" min="0" max="14" inputmode="decimal" data-meas="ph" value="${esc(draft.pool.ph)}" placeholder="7,4"></label>
+      <label class="field"><span>Cloro (ppm)</span><input type="number" step="0.1" min="0" inputmode="decimal" data-meas="cloro" value="${esc(draft.pool.cloro)}" placeholder="1,5"></label>
+      <label class="field"><span>Alcalinidade (ppm)</span><input type="number" step="1" min="0" inputmode="numeric" data-meas="alcal" value="${esc(draft.pool.alcal)}" placeholder="100"></label>
+      <label class="field"><span>Dureza Cálcica (ppm)</span><input type="number" step="10" min="0" inputmode="numeric" data-meas="dureza" value="${esc(draft.pool.dureza)}" placeholder="250"></label>
     </div>
-    <div class="ref-chips"><span>pH ideal 7,2–7,6</span><span>Cloro 1,0–3,0 ppm</span><span>Alc. 80–120 ppm</span></div>
+    <div class="ref-chips"><span>pH 7,2–7,6</span><span>Cloro 1,0–3,0</span><span>Alc. 80–120</span><span>Dureza 200–400</span></div>
     <div id="recBox"></div>
     <span class="field-lbl">Tarefas Executadas</span>
     <div class="chk-grid">${checkGrid('pool', TASKS.pool)}</div>
@@ -543,12 +614,13 @@ Views.inspection = async ({ siteId } = {}) => {
       <div class="sec-body">${body}</div>
     </section>`;
 
-  App.el.innerHTML = topbar('Nova Vistoria', '#/') + `
+  App.el.innerHTML = topbar(editSource ? 'Editar Relatório' : 'Nova Vistoria', editSource ? '#/relatorio/' + editSource.id : '#/') + `
   <main class="view container">
     <div class="card form">
       <label class="field"><span>Sítio / Cliente</span>
         <select id="selSite">
           ${sites.map((s) => `<option value="${s.id}" ${s.id === draft.siteId ? 'selected' : ''}>${esc(s.siteName)} — ${esc(s.ownerName)}</option>`).join('')}
+          ${!sites.some((s) => s.id === draft.siteId) ? `<option value="${esc(draft.siteId)}" selected>Sítio do relatório original</option>` : ''}
         </select>
       </label>
       <div class="meta-row">
@@ -557,7 +629,7 @@ Views.inspection = async ({ siteId } = {}) => {
       </div>
     </div>
 
-    ${secCard('pool', 'A', 'a', 'Parâmetros da Piscina', 'pH, cloro, alcalinidade, tarefas e fotos', poolBody())}
+    ${secCard('pool', 'A', 'a', 'Parâmetros da Piscina', 'pH, cloro, alcalinidade, dureza e fotos', poolBody())}
     ${secCard('site', 'B', 'b', 'Limpeza do Sítio', 'Churrasqueira, varandas, banheiros e lixo', siteBody())}
     ${secCard('garden', 'C', 'c', 'Roçada e Jardinagem', 'Áreas roçadas e observações', gardenBody())}
 
@@ -566,15 +638,14 @@ Views.inspection = async ({ siteId } = {}) => {
         <textarea id="genNotes" rows="2" placeholder="Algo mais para registrar?">${esc(draft.generalNotes)}</textarea></label>
     </div>
 
-    <button class="btn primary block big" id="finish">${icon('check')} Finalizar e Gerar Relatório</button>
+    <button class="btn primary block big" id="finish">${icon('check')} ${editSource ? 'Salvar Alterações e Regenerar PDF' : 'Finalizar e Gerar Relatório'}</button>
   </main>`;
 
-  /* ---- Recomendações ao vivo ---- */
   function renderRecs(){
     const box = $('#recBox'); if (!box) return;
-    const vol = (curSite() && curSite().volume) || 0;
-    const recs = computeRecs(vol, draft.pool.cloro, draft.pool.ph);
-    const touched = draft.pool.cloro !== '' || draft.pool.ph !== '' || draft.pool.alcal !== '';
+    const vol = (curSite() && curSite().volume) || (editSource && editSource.pool && editSource.pool.volume) || 0;
+    const recs = computeRecs(vol, draft.pool.cloro, draft.pool.ph, draft.pool.dureza);
+    const touched = draft.pool.cloro !== '' || draft.pool.ph !== '' || draft.pool.alcal !== '' || draft.pool.dureza !== '';
     if (!vol && touched){
       box.innerHTML = `<div class="alert warn">${icon('alert')}<span>Cadastre a litragem do sítio para calcular a dosagem automaticamente.</span></div>`;
     } else if (recs.length){
@@ -597,7 +668,6 @@ Views.inspection = async ({ siteId } = {}) => {
     });
   }
 
-  /* ---- Bindings ---- */
   $('#selSite').onchange = (e) => { draft.siteId = e.target.value; refreshSiteInfo(); renderRecs(); };
   $('#inspDate').onchange = (e) => draft.dateISO = e.target.value;
   $$('[data-toggle]').forEach((sw) => sw.onchange = (e) => {
@@ -607,10 +677,7 @@ Views.inspection = async ({ siteId } = {}) => {
     card.classList.toggle('off', !e.target.checked);
     card.classList.toggle('on', e.target.checked);
   });
-  $$('[data-meas]').forEach((i) => i.oninput = (e) => {
-    draft.pool[e.target.dataset.meas] = e.target.value;
-    renderRecs();
-  });
+  $$('[data-meas]').forEach((i) => i.oninput = (e) => { draft.pool[e.target.dataset.meas] = e.target.value; renderRecs(); });
   $$('.chk input').forEach((c) => c.onchange = (e) => {
     draft[e.target.dataset.sec].tasks[e.target.dataset.key] = e.target.checked;
   });
@@ -622,59 +689,86 @@ Views.inspection = async ({ siteId } = {}) => {
     const sec = slot.dataset.sec, kind = slot.dataset.kind;
     const files = [...inp.files]; inp.value = '';
     for (const fLe of files){
-      try { draft[sec].photos[kind].push(await compressImage(fLe)); }
-      catch (_) { toast('Não foi possível processar a imagem.', 'warn'); }
+      if (draft[sec].photos[kind].length >= MAX_PHOTOS){
+        toast(`Máximo de ${MAX_PHOTOS} fotos por campo.`, 'warn');
+        break;
+      }
+      try {
+        /* UMA foto por vez → pico de memória controlado */
+        draft[sec].photos[kind].push(await compressImage(fLe));
+        renderThumbs(slot, sec, kind);
+      } catch (_){
+        toast('Não foi possível processar esta imagem (muito grande?). Tente pela galeria.', 'warn', 3600);
+      }
     }
-    renderThumbs(slot, sec, kind);
-    if (files.length) toast(files.length + ' foto(s) adicionada(s).');
   });
   $('#finish').onclick = finalizar;
 
   refreshSiteInfo();
   renderRecs();
 
-  /* ---- Finalização: salva → gera PDF → guarda o Blob ---- */
   const finishHTML = $('#finish').innerHTML;
   async function finalizar(){
     if (!draft.siteId) return toast('Selecione o sítio.', 'warn');
     const active = ['pool', 'site', 'garden'].filter((k) => draft[k].active);
     if (!active.length) return toast('Ative pelo menos uma seção da vistoria.', 'warn');
 
-    const site = curSite();
+    const s0 = curSite();
+    /* Fallback caso o sítio original tenha sido excluído */
+    const site = s0 || {
+      id: draft.siteId,
+      siteName: (editSource && editSource.siteName) || 'Sítio',
+      ownerName: (editSource && editSource.ownerName) || '',
+      volume: (editSource && editSource.pool && editSource.pool.volume) || 0
+    };
+    const vol = site.volume || 0;
+
     const btn = $('#finish');
     btn.disabled = true;
-    btn.innerHTML = '<span class="spin"></span> Gerando PDF…';
+    btn.innerHTML = '<span class="spin"></span> Salvando…';
     try {
-      const report = {
-        id: uid(),
-        code: String(Date.now()).slice(-6),
+      /* Mantém id/código ao editar; cria novos ao concluir */
+      const report = editSource ? { ...editSource } : { id: uid(), code: String(Date.now()).slice(-6), createdAt: Date.now() };
+      Object.assign(report, {
         siteId: site.id, siteName: site.siteName, ownerName: site.ownerName,
         dateISO: draft.dateISO + 'T' + new Date().toTimeString().slice(0, 5),
         sections: active,
-        pool: { ...draft.pool, volume: site.volume || 0, recs: computeRecs(site.volume || 0, draft.pool.cloro, draft.pool.ph) },
+        pool: { ...draft.pool, volume: vol, recs: computeRecs(vol, draft.pool.cloro, draft.pool.ph, draft.pool.dureza) },
         site: draft.site, garden: draft.garden,
         generalNotes: draft.generalNotes,
-        synced: false, createdAt: Date.now()
-      };
-      /* PERSISTÊNCIA OFFLINE 1/2: o relatório é salvo imediatamente no IndexedDB… */
-      await DB.put('reports', report);
-      /* …2/2: depois o PDF é gerado (fotos Base64 → JPEG embutido) e o Blob
-         também é armazenado, para reenviar pelo WhatsApp a qualquer momento. */
-      report.pdfBlob = await ReportPDF.build(report, site, settings);
+        synced: false
+      });
+      if (editSource) report.editedAt = Date.now();
+      delete report.pdfBase64; /* será regenerado */
+
+      /* PERSISTÊNCIA: salva o relatório imediatamente (IndexedDB) */
       await DB.put('reports', report);
 
-      toast('Relatório gerado e salvo offline.');
+      /* Gera o PDF e guarda como Base64 — se falhar, o relatório
+         já está salvo e dá para tentar de novo na tela dele. */
+      let pdfOk = true;
+      try {
+        btn.innerHTML = '<span class="spin"></span> Gerando PDF…';
+        const blob = await ReportPDF.build(report, site, settings);
+        report.pdfBase64 = await blobToB64(blob);
+        await DB.put('reports', report);
+      } catch (err){
+        pdfOk = false;
+        console.error('Falha no PDF:', err);
+      }
+
+      toast(pdfOk ? 'Relatório salvo com PDF.' : 'Relatório salvo. O PDF pode ser gerado na tela dele.', pdfOk ? 'ok' : 'warn', 3600);
       location.hash = '#/relatorio/' + report.id;
     } catch (err){
       console.error(err);
-      toast('Erro ao gerar o relatório.', 'warn');
+      toast('Erro ao salvar: ' + (err && err.message ? err.message : 'desconhecido'), 'warn', 4200);
       btn.disabled = false;
       btn.innerHTML = finishHTML;
     }
   }
 };
 
-/* ---------- 5. HISTÓRICO ---------- */
+/* ---------- HISTÓRICO ---------- */
 Views.history = async () => {
   const reports = (await DB.all('reports')).sort((a, b) => b.createdAt - a.createdAt);
   App.el.innerHTML = topbar('Histórico de Relatórios', '#/') + `
@@ -685,15 +779,14 @@ Views.history = async () => {
           <span class="item-ic">${icon('file')}</span>
           <div class="item-tx">
             <strong>${esc(r.siteName)}</strong>
-            <span>${new Date(r.dateISO).toLocaleDateString('pt-BR')} • ${r.sections.map(labelSec).join(' + ')}</span>
+            <span>${new Date(r.dateISO).toLocaleDateString('pt-BR')} • ${r.sections.map(labelSec).join(' + ')}${r.editedAt ? ' • editado' : ''}</span>
           </div>
-          <span class="sync-dot ${r.synced ? 'ok' : 'pend'}" title="${r.synced ? 'Sincronizado' : 'Pendente de sincronização'}"></span>
+          <span class="sync-dot ${r.synced ? 'ok' : 'pend'}" title="${r.synced ? 'Sincronizado' : 'Pendente'}"></span>
           <button class="del" aria-label="Excluir">${icon('trash')}</button>
         </div>`).join('')
       : emptyState('file', 'Nenhuma vistoria registrada', 'Os relatórios gerados aparecem aqui — mesmo sem internet.')}
     </div>
   </main>`;
-
   $$('.item.rep').forEach((el) => {
     el.onclick = (e) => { if (e.target.closest('.del')) return; location.hash = '#/relatorio/' + el.dataset.id; };
   });
@@ -708,22 +801,24 @@ Views.history = async () => {
   });
 };
 
-/* ---------- 6. RELATÓRIO GERADO (compartilhar / baixar) ---------- */
-async function getPdfBlob(r){
-  if (r.pdfBlob instanceof Blob) return r.pdfBlob;
-  const site = (await DB.get('sites', r.siteId)) || {};
+/* ---------- RELATÓRIO GERADO (PDF garantido + EDITAR) ---------- */
+async function ensurePdf(r){
+  if (r.pdfBase64) return b64ToBlob(r.pdfBase64);
+  const site = (await DB.get('sites', r.siteId)) || { siteName: r.siteName, ownerName: r.ownerName, volume: (r.pool && r.pool.volume) || 0 };
   const st = await getSettings();
   const blob = await ReportPDF.build(r, site, st);
-  r.pdfBlob = blob;
+  r.pdfBase64 = await blobToB64(blob);
   await DB.put('reports', r);
   return blob;
 }
+function pdfFileName(r){
+  const safe = String(r.siteName || 'relatorio').replace(/\s+/g, '-').replace(/[^\w-]/g, '');
+  return `NEGRETS-MASTER_${safe}_${String(r.dateISO).slice(0, 10)}.pdf`;
+}
 async function shareReport(r){
   try {
-    const blob = await getPdfBlob(r);
-    const safeName = (r.siteName || 'relatorio').replace(/\s+/g, '-').replace(/[^\w-]/g, '');
-    const file = new File([blob], `NEGRET'S-MASTER_${safeName}_${r.dateISO.slice(0, 10)}.pdf`, { type: 'application/pdf' });
-    /* WEB SHARE API — compartilha o PDF direto no WhatsApp/e-mail do cliente */
+    const blob = await ensurePdf(r);
+    const file = new File([blob], pdfFileName(r), { type: 'application/pdf' });
     if (navigator.canShare && navigator.canShare({ files: [file] })){
       await navigator.share({ files: [file], title: 'Relatório ' + r.siteName, text: 'Segue o relatório de serviços.' });
     } else {
@@ -747,7 +842,7 @@ Views.reportView = async ({ id }) => {
 
   const rows = [];
   if (r.pool && r.pool.active){
-    rows.push(['pH / Cloro / Alcalinidade', [r.pool.ph || '—', r.pool.cloro || '—', r.pool.alcal || '—'].join('  /  ')]);
+    rows.push(['pH / Cloro / Alc. / Dureza', [r.pool.ph || '—', r.pool.cloro || '—', r.pool.alcal || '—', r.pool.dureza || '—'].join('  /  ')]);
     const done = ReportPDF.TASKS.pool.filter(([k]) => r.pool.tasks && r.pool.tasks[k]).map(([, l]) => l);
     rows.push(['Tarefas da piscina', done.length ? done.join(', ') : '—']);
   }
@@ -762,10 +857,14 @@ Views.reportView = async ({ id }) => {
 
   App.el.innerHTML = topbar('Relatório Nº ' + r.code, '#/historico') + `
   <main class="view container">
+    ${!r.pdfBase64 ? `
+    <div class="alert warn">${icon('alert')}<span>PDF ainda não gerado para este relatório.</span>
+      <button class="btn small primary" id="genPdfBtn">Gerar agora</button></div>` : ''}
+
     <section class="card done-card">
       <span class="done-check">${checkSVG}</span>
       <h2>Relatório pronto!</h2>
-      <p>${esc(r.siteName)} • ${dataBR(r.dateISO.slice(0, 10))}</p>
+      <p>${esc(r.siteName)} • ${dataBR(String(r.dateISO).slice(0, 10))}${r.editedAt ? ' • <b>editado</b>' : ''}</p>
       <div class="chips">${r.sections.map((k) => `<span>${labelSec(k)}</span>`).join('')}</div>
     </section>
 
@@ -774,6 +873,7 @@ Views.reportView = async ({ id }) => {
       <button class="btn ghost block" id="openBtn">${icon('file')} Visualizar</button>
       <button class="btn ghost block" id="downBtn">${icon('download')} Baixar</button>
     </div>
+    <button class="btn ghost block" id="editBtn">${icon('edit')} Editar Relatório</button>
     <button class="btn ghost block" id="againBtn">${icon('plus')} Nova Vistoria</button>
 
     <section class="card sum">
@@ -784,23 +884,38 @@ Views.reportView = async ({ id }) => {
     </section>
   </main>`;
 
-  $('#shareBtn').onclick = () => shareReport(r);
-  $('#againBtn').onclick = () => location.hash = '#/vistoria';
-  $('#openBtn').onclick = async () => {
-    const url = URL.createObjectURL(await getPdfBlob(r));
-    const w = window.open(url, '_blank');
-    if (!w){ const a = document.createElement('a'); a.href = url; a.download = 'relatorio.pdf'; a.click(); }
+  const busy = async (btn, fn) => {
+    const old = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spin"></span> Aguarde…';
+    try { await fn(); } catch (e){ console.error(e); toast('Falha no PDF: ' + (e && e.message ? e.message : 'erro'), 'warn', 4000); }
+    btn.disabled = false; btn.innerHTML = old;
   };
-  $('#downBtn').onclick = async () => {
-    const blob = await getPdfBlob(r);
+
+  $('#shareBtn').onclick = (e) => busy(e.currentTarget, () => shareReport(r));
+  $('#openBtn').onclick  = (e) => busy(e.currentTarget, async () => {
+    const url = URL.createObjectURL(await ensurePdf(r));
+    const w = window.open(url, '_blank');
+    if (!w){ const a = document.createElement('a'); a.href = url; a.target = '_blank'; a.click(); }
+  });
+  $('#downBtn').onclick  = (e) => busy(e.currentTarget, async () => {
+    const blob = await ensurePdf(r);
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = 'relatorio-' + r.code + '.pdf'; a.click();
+    a.href = url; a.download = pdfFileName(r); a.click();
     setTimeout(() => URL.revokeObjectURL(url), 4000);
-  };
+  });
+  $('#editBtn').onclick  = () => location.hash = '#/editar/' + r.id;
+  $('#againBtn').onclick = () => location.hash = '#/vistoria';
+  const gp = $('#genPdfBtn');
+  if (gp) gp.onclick = (e) => busy(e.currentTarget, async () => {
+    await ensurePdf(r);
+    toast('PDF gerado e salvo.');
+    Views.reportView({ id: r.id });
+  });
 };
 
-/* ---------- 7. AJUSTES DA EMPRESA ---------- */
+/* ---------- AJUSTES ---------- */
 Views.settings = async () => {
   const st = await getSettings();
   App.el.innerHTML = topbar('Ajustes da Empresa', '#/') + `
@@ -816,23 +931,20 @@ Views.settings = async () => {
       </div>
       <button class="btn primary block" type="submit">${icon('check')} Salvar Ajustes</button>
     </form>
-
     <section class="card form">
       <h2 style="font-size:.74rem;letter-spacing:.12em;color:var(--pool);text-transform:uppercase;font-weight:800">Aplicativo</h2>
       <button class="btn ghost block" id="installBtn" hidden>${icon('download')} Instalar na tela inicial</button>
       <p class="hint" id="iosHint" hidden>No iPhone: toque em <b>Compartilhar</b> e depois em <b>Adicionar à Tela de Início</b>.</p>
       <button class="btn ghost block" id="wipeBtn" style="color:var(--bad)">${icon('trash')} Apagar todos os dados locais</button>
-      <p class="hint">Os dados ficam salvos apenas neste aparelho (IndexedDB), com acesso total offline. A sincronização com a nuvem pode ser ativada em <b>CONFIG.SYNC_ENDPOINT</b> (js/app.js).</p>
+      <p class="hint">Os dados ficam salvos apenas neste aparelho (IndexedDB), com acesso total offline. Fotos são comprimidas para 1280px/JPEG antes de salvar.</p>
     </section>
   </main>`;
 
   $('#setForm').onsubmit = async (e) => {
     e.preventDefault();
-    const data = Object.fromEntries(new FormData(e.target).entries());
-    await saveSettings(data); /* PERSISTÊNCIA: ajustes no IndexedDB */
+    await saveSettings(Object.fromEntries(new FormData(e.target).entries()));
     toast('Ajustes salvos.');
   };
-
   const ib = $('#installBtn');
   if (deferredPrompt){
     ib.hidden = false;
@@ -845,9 +957,8 @@ Views.settings = async () => {
   } else if (/iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream){
     $('#iosHint').hidden = false;
   }
-
   $('#wipeBtn').onclick = async () => {
-    if (!await confirmDlg({ title: 'Apagar todos os dados?', text: 'Sítios, relatórios e ajustes deste aparelho serão removidos definitivamente.', okLabel: 'Apagar tudo', danger: true })) return;
+    if (!await confirmDlg({ title: 'Apagar todos os dados?', text: 'Sítios, relatórios e ajustes serão removidos definitivamente.', okLabel: 'Apagar tudo', danger: true })) return;
     await Promise.all([DB.clear('sites'), DB.clear('reports'), DB.clear('settings')]);
     toast('Dados apagados.');
     location.hash = '#/';
@@ -860,12 +971,9 @@ async function init(){
   $$('[data-ic]').forEach((el) => { el.outerHTML = icon(el.dataset.ic); });
   await DB.open();
   App.render();
-
-  /* Service Worker → instalação e modo offline */
   if ('serviceWorker' in navigator){
     window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(console.warn));
   }
 }
 window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); deferredPrompt = e; });
-window.addEventListener('appinstalled', () => toast('NEGRET&rsquo;S MASTER instalado!'));
 document.addEventListener('DOMContentLoaded', init);
