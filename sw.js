@@ -3,7 +3,7 @@
    Estratégia: Cache-First com revalidação em segundo plano.
    O app shell inteiro é pré-cacheado na instalação → abre offline.
    ========================================================= */
-const VERSION = 'negrets-master-v3';
+const VERSION = 'negrets-master-v5';
 
 const CORE = [
   './',
