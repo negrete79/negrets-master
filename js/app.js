@@ -1,24 +1,17 @@
 /* =========================================================
-   NEGRET'S MASTER — js/app.js (v3 — reescrita completa)
+   NEGRET'S MASTER — js/app.js (v5 — reescrita completa)
    -----------------------------------------------------------
-   Arquitetura:
-   1.  CONFIG            → ponto único de integração futura
-   2.  UTILITÁRIOS       → helpers puros (sem efeito colateral)
-   3.  ÍCONES            → SVG inline (offline, sem CDN)
-   4.  TOAST / MODAL     → feedback ao operador
-   5.  AJUSTES           → perfil da empresa (IndexedDB)
-   6.  SINCRONIZAÇÃO     → indicador online/offline + envio
-   7.  HELPERS DE UI     → topbar, empty state, rótulos
-   8.  FOTOS             → pipeline leve (câmera/galeria)
-   9.  CÁLCULOS          → litragem + recomendações químicas
-   10. ROUTER            → SPA por hash
-   11. VIEWS             → dashboard, sítios, vistoria, histórico,
-                           relatório, ajustes
-   12. MIGRAÇÃO          → normaliza dados antigos/parciais
-   13. BOOT              → inicialização + Service Worker
-
-   Persistência: 100% IndexedDB (stores: sites, reports, settings).
-   Nenhum dado sai do aparelho sem SYNC_ENDPOINT configurado.
+   Novidades da v5:
+   • Cadastro RÁPIDO de cliente dentro da vistoria (modal com
+     litragem ao vivo) — salva no IndexedDB e já seleciona.
+   • Cadastro rápido também na lista de Sítios.
+   • Diagnóstico de Instalação (PWA) em Ajustes: checa SW,
+     manifest e cada ícone, apontando o que impede a instalação.
+   Estrutura:
+   1 CONFIG · 2 UTILS · 3 ÍCONES · 4 TOAST/MODAL · 5 AJUSTES
+   6 SINCRONIZAÇÃO · 7 UI HELPERS · 8 FOTOS · 9 CÁLCULOS
+   10 MODAL NOVO CLIENTE · 11 ROUTER · 12 VIEWS · 13 MIGRAÇÃO
+   14 BOOT
    ========================================================= */
 'use strict';
 
@@ -26,15 +19,13 @@
    1. CONFIG
    ========================================================= */
 const CONFIG = {
-  /* Cole aqui a URL de um backend/Google Apps Script para
-     sincronizar à nuvem. Vazio = modo 100% local (offline). */
+  /* URL de nuvem futura (Google Apps Script etc.). Vazio = 100% local. */
   SYNC_ENDPOINT: ''
 };
 
-/* Limites de fotos por campo (proteção de memória em campo) */
-const PHOTO_MAX_DIM   = 1280; /* px — lado maior após compressão   */
-const PHOTO_QUALITY   = 0.65; /* JPEG quality                       */
-const MAX_PHOTOS      = 8;    /* por slot (antes/depois/seção)      */
+const PHOTO_MAX_DIM = 1280;  /* px do lado maior após compressão */
+const PHOTO_QUALITY = 0.65;  /* qualidade JPEG */
+const MAX_PHOTOS    = 8;     /* por campo (antes/depois de cada seção) */
 
 /* =========================================================
    2. UTILITÁRIOS
@@ -68,8 +59,7 @@ const saudacao = () => {
   return h < 12 ? 'Bom dia' : h < 18 ? 'Boa tarde' : 'Boa noite';
 };
 
-/* Base64 ⇄ Blob — o PDF é persistido como TEXTO (Base64) porque
-   é o formato mais compatível entre navegadores/aparelhos. */
+/* PDF é persistido como Base64 (texto) — máxima compatibilidade */
 const blobToB64 = (blob) => new Promise((res, rej) => {
   const fr = new FileReader();
   fr.onload = () => res(String(fr.result).split(',')[1]);
@@ -85,12 +75,12 @@ function b64ToBlob(b64){
   return new Blob([u8], { type: 'application/pdf' });
 }
 
-/* Leitura segura: retorna obj[k] ou dflt se obj/obj[k] inválido */
+/* Leitura segura de propriedades — nunca lança em null/undefined */
 const g = (obj, k, dflt) =>
   (obj && typeof obj === 'object' && obj[k] !== undefined && obj[k] !== null) ? obj[k] : dflt;
 
 /* =========================================================
-   3. ÍCONES (SVG inline — traço, sem dependência externa)
+   3. ÍCONES (SVG inline — sem CDN, funciona offline)
    ========================================================= */
 const ICONS = {
   home:'<path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>',
@@ -114,7 +104,8 @@ const ICONS = {
   sync:'<polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>',
   user:'<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
   phone:'<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>',
-  edit:'<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4z"/>'
+  edit:'<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4z"/>',
+  shield:'<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>'
 };
 const icon = (name) =>
   `<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ''}</svg>`;
@@ -181,7 +172,7 @@ const saveSettings = (v) => DB.put('settings', { key: 'company', value: v });
 let deferredPrompt = null;
 
 /* =========================================================
-   6. SINCRONIZAÇÃO (indicador visual + envio futuro)
+   6. SINCRONIZAÇÃO (indicador online/offline + envio futuro)
    ========================================================= */
 const netPillHTML = () => '<i class="dot"></i>' + (navigator.onLine ? 'Online' : 'Offline');
 
@@ -191,9 +182,6 @@ function updateNetUI(){
 }
 
 const Sync = {
-  async pendingCount(){
-    return (await DB.all('reports')).filter((r) => !r.synced).length;
-  },
   async syncNow(){
     if (!navigator.onLine){
       return toast('Sem internet agora — seus dados continuam salvos no aparelho.', 'warn');
@@ -207,14 +195,14 @@ const Sync = {
     let ok = 0;
     for (const r of pend){
       try {
-        const { pdfBase64, ...json } = r; /* PDF não vai no JSON */
+        const { pdfBase64, ...json } = r; /* o PDF em si não vai no JSON */
         const res = await fetch(CONFIG.SYNC_ENDPOINT, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(json)
         });
         if (res.ok){ r.synced = true; await DB.put('reports', r); ok++; }
-      } catch (_) { /* segue para o próximo */ }
+      } catch (_) { /* tenta o próximo */ }
     }
     toast(ok === pend.length ? ok + ' relatório(s) enviados.' : ok + '/' + pend.length + ' enviados — tente novamente.', ok ? 'ok' : 'warn');
     updateNetUI();
@@ -242,7 +230,6 @@ const emptyState = (ic, title, text, href, btn) => `
 
 const labelSec = (k) => ({ pool: 'Piscina', site: 'Sítio', garden: 'Roçada' }[k] || k);
 
-/* Contador animado (litragem) */
 function animateNumber(el, to, dur = 550){
   if (!el) return;
   const from = Number(el.dataset.v || 0);
@@ -259,13 +246,9 @@ function animateNumber(el, to, dur = 550){
 
 /* =========================================================
    8. FOTOS — pipeline leve
-   -----------------------------------------------------------
-   • Sem atributo "capture": o Android/iOS oferece CÂMERA e
-     GALERIA do dispositivo naturalmente.
-   • createImageBitmap decodifica direto (menos RAM) e é
-     liberado com .close() após o uso.
-   • Processamento UMA foto por vez → pico de memória baixo.
-   • Fallback <img>+canvas para navegadores antigos.
+   • Sem atributo "capture": Android/iOS oferecem CÂMERA e GALERIA.
+   • createImageBitmap + .close() → baixo pico de memória.
+   • UMA foto por vez; fallback <img>+canvas p/ navegadores antigos.
    ========================================================= */
 function legacyCompress(file){
   return new Promise((resolve, reject) => {
@@ -280,7 +263,7 @@ function legacyCompress(file){
         c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
         URL.revokeObjectURL(url);
         const out = c.toDataURL('image/jpeg', PHOTO_QUALITY);
-        c.width = c.height = 0; /* libera o canvas */
+        c.width = c.height = 0;
         resolve(out);
       } catch (e){ URL.revokeObjectURL(url); reject(e); }
     };
@@ -302,7 +285,7 @@ async function compressImage(file){
       c.width  = Math.max(1, Math.round(bmp.width * scale));
       c.height = Math.max(1, Math.round(bmp.height * scale));
       c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
-      if (bmp.close) bmp.close(); /* LIBERA a imagem original */
+      if (bmp.close) bmp.close(); /* LIBERA a imagem original da RAM */
       const out = c.toDataURL('image/jpeg', PHOTO_QUALITY);
       c.width = c.height = 0;
       return out;
@@ -313,20 +296,15 @@ async function compressImage(file){
 
 /* =========================================================
    9. CÁLCULOS
-   -----------------------------------------------------------
-   LITRAGEM:
-     Retangular: C × L × Prof × 1000
-     Redonda:    D × D × Prof × 0,785 × 1000
-   RECOMENDAÇÕES (por litro):
-     Cloro  < 1,0 ppm → Volume × 0,004 g de Cloro
-     pH     > 7,6     → Volume × 0,007 ml de Redutor
-     Dureza < 200 / > 400 ppm → orientação de correção
+   LITRAGEM:  Retangular C×L×P×1000 | Redonda D×D×P×0,785×1000
+   DOSAGEM:   Cloro <1,0 ppm → Vol×0,004 g | pH >7,6 → Vol×0,007 ml
+              Dureza cálcica <200 / >400 ppm → orientação
    ========================================================= */
 function calcVolume(shape, { length = 0, width = 0, diameter = 0, depth = 0 } = {}){
-  const C = parseFloat(length)  || 0;
-  const L = parseFloat(width)   || 0;
-  const D = parseFloat(diameter)|| 0;
-  const P = parseFloat(depth)   || 0;
+  const C = parseFloat(length)   || 0;
+  const L = parseFloat(width)    || 0;
+  const D = parseFloat(diameter) || 0;
+  const P = parseFloat(depth)    || 0;
   if (P <= 0) return 0;
   if (shape === 'retangular') return C * L * P * 1000;
   if (shape === 'redonda')    return D * D * P * 0.785 * 1000;
@@ -350,21 +328,113 @@ function computeRecs(vol, cloro, ph, dureza){
 }
 
 /* =========================================================
-   10. ROUTER (SPA por hash)
+   10. MODAL "NOVO CLIENTE" (cadastro rápido com litragem)
+   Usado na vistoria e na lista de sítios.
+   ========================================================= */
+function openClientModal(onSaved){
+  const back = document.createElement('div');
+  back.className = 'modal-back';
+  back.innerHTML = `
+  <div class="modal" style="max-width:400px;max-height:88vh;overflow:auto">
+    <h3>Novo Cliente</h3>
+    <p style="margin-bottom:12px">Cadastro rápido. A piscina pode ser detalhada depois em <b>Sítios</b>.</p>
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <label class="field"><span>Nome do Sítio *</span><input id="qcSite" placeholder="Ex.: Sítio Boa Vista"></label>
+      <label class="field"><span>Proprietário *</span><input id="qcOwner" placeholder="Ex.: Roberto Negret"></label>
+      <label class="field"><span>Telefone / WhatsApp</span><input id="qcPhone" inputmode="tel" placeholder="(31) 99999-0000"></label>
+      <span class="field-lbl">Formato da Piscina (opcional)</span>
+      <div class="segmented">
+        <label><input type="radio" name="qcShape" value="retangular" checked><span>Retangular</span></label>
+        <label><input type="radio" name="qcShape" value="redonda"><span>Redonda</span></label>
+      </div>
+      <div id="qcDims"></div>
+      <div class="vol-line">${icon('droplet')}<span>Litragem: <strong id="qcVol">—</strong></span></div>
+      <div class="modal-actions" style="margin-top:6px">
+        <button class="btn ghost" data-a="c">Cancelar</button>
+        <button class="btn primary" data-a="s">Salvar Cliente</button>
+      </div>
+    </div>
+  </div>`;
+  document.body.appendChild(back);
+
+  const dims   = $('#qcDims', back);
+  const shapeVal = () => back.querySelector('input[name="qcShape"]:checked').value;
+  const num    = (k) => { const el = back.querySelector('#qc_' + k); return el ? parseFloat(el.value) || 0 : 0; };
+
+  function renderDims(){
+    dims.innerHTML = shapeVal() === 'retangular' ? `
+      <div class="grid3">
+        <label class="field"><span>Compr. (m)</span><input type="number" step="0.1" min="0" inputmode="decimal" id="qc_length" placeholder="0,0"></label>
+        <label class="field"><span>Larg. (m)</span><input type="number" step="0.1" min="0" inputmode="decimal" id="qc_width" placeholder="0,0"></label>
+        <label class="field"><span>Prof. (m)</span><input type="number" step="0.1" min="0" inputmode="decimal" id="qc_depth" placeholder="0,0"></label>
+      </div>` : `
+      <div class="grid2">
+        <label class="field"><span>Diâmetro (m)</span><input type="number" step="0.1" min="0" inputmode="decimal" id="qc_diameter" placeholder="0,0"></label>
+        <label class="field"><span>Prof. (m)</span><input type="number" step="0.1" min="0" inputmode="decimal" id="qc_depth" placeholder="0,0"></label>
+      </div>`;
+    $$('input', dims).forEach((i) => i.addEventListener('input', updVol));
+  }
+
+  function updVol(){
+    /* CÁLCULO em tempo real (mesma fórmula do cadastro completo) */
+    const v = calcVolume(shapeVal(), {
+      length: num('length'), width: num('width'),
+      diameter: num('diameter'), depth: num('depth')
+    });
+    $('#qcVol', back).textContent = v > 0 ? fmt0.format(Math.round(v)) + ' L' : '—';
+    return v;
+  }
+
+  back.querySelectorAll('input[name="qcShape"]').forEach((r) => r.addEventListener('change', renderDims));
+  renderDims();
+
+  back.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-a]');
+    if (!b){
+      if (e.target === back) back.remove();
+      return;
+    }
+    if (b.dataset.a === 'c') return back.remove();
+
+    const siteName  = $('#qcSite', back).value.trim();
+    const ownerName = $('#qcOwner', back).value.trim();
+    if (!siteName || !ownerName) return toast('Preencha sítio e proprietário.', 'warn');
+
+    const rec = {
+      id: uid(),
+      ownerName, siteName,
+      phone: $('#qcPhone', back).value.trim(),
+      address: '',
+      poolType: 'fibra',
+      poolShape: shapeVal(),
+      length: String(num('length') || ''), width: String(num('width') || ''),
+      diameter: String(num('diameter') || ''), depth: String(num('depth') || ''),
+      volume: Math.round(updVol()),
+      createdAt: Date.now(), updatedAt: Date.now()
+    };
+    /* PERSISTÊNCIA: novo cliente gravado no IndexedDB */
+    await DB.put('sites', rec);
+    back.remove();
+    onSaved(rec);
+  });
+}
+
+/* =========================================================
+   11. ROUTER (SPA por hash)
    ========================================================= */
 const App = {
   el: null,
   routes: [
-    { re: /^#\/?$/,                  view: 'dashboard',  m: () => ({}) },
-    { re: /^#\/sites$/,              view: 'sites',      m: () => ({}) },
-    { re: /^#\/site\/novo$/,         view: 'siteForm',   m: () => ({}) },
-    { re: /^#\/site\/([\w-]+)$/,     view: 'siteForm',   m: (m) => ({ id: m[1] }) },
-    { re: /^#\/vistoria$/,           view: 'inspection', m: () => ({}) },
-    { re: /^#\/vistoria\/([\w-]+)$/, view: 'inspection', m: (m) => ({ siteId: m[1] }) },
-    { re: /^#\/editar\/([\w-]+)$/,   view: 'inspection', m: (m) => ({ reportId: m[1] }) },
-    { re: /^#\/historico$/,          view: 'history',    m: () => ({}) },
-    { re: /^#\/relatorio\/([\w-]+)$/,view: 'reportView', m: (m) => ({ id: m[1] }) },
-    { re: /^#\/ajustes$/,            view: 'settings',   m: () => ({}) }
+    { re: /^#\/?$/,                   view: 'dashboard',  m: () => ({}) },
+    { re: /^#\/sites$/,               view: 'sites',      m: () => ({}) },
+    { re: /^#\/site\/novo$/,          view: 'siteForm',   m: () => ({}) },
+    { re: /^#\/site\/([\w-]+)$/,      view: 'siteForm',   m: (m) => ({ id: m[1] }) },
+    { re: /^#\/vistoria$/,            view: 'inspection', m: () => ({}) },
+    { re: /^#\/vistoria\/([\w-]+)$/,  view: 'inspection', m: (m) => ({ siteId: m[1] }) },
+    { re: /^#\/editar\/([\w-]+)$/,    view: 'inspection', m: (m) => ({ reportId: m[1] }) },
+    { re: /^#\/historico$/,           view: 'history',    m: () => ({}) },
+    { re: /^#\/relatorio\/([\w-]+)$/, view: 'reportView', m: (m) => ({ id: m[1] }) },
+    { re: /^#\/ajustes$/,             view: 'settings',   m: () => ({}) }
   ],
   async render(){
     if (!this.el) return;
@@ -398,11 +468,11 @@ function updateNav(view){
 window.addEventListener('hashchange', () => App.render());
 
 /* =========================================================
-   11. VIEWS
+   12. VIEWS
    ========================================================= */
 const Views = {};
 
-/* ---------- 11.1 DASHBOARD ---------- */
+/* ---------- 12.1 DASHBOARD ---------- */
 Views.dashboard = async () => {
   const [settings, sites, reports] = await Promise.all([getSettings(), DB.all('sites'), DB.all('reports')]);
   const pending = reports.filter((r) => !r.synced).length;
@@ -462,7 +532,7 @@ Views.dashboard = async () => {
       <span class="act-tx">
         <small>CONFIGURAÇÕES</small>
         <strong>AJUSTES GERAIS</strong>
-        <em>Dados da empresa, técnico e preferências</em>
+        <em>Dados da empresa, técnico e diagnóstico de instalação</em>
       </span>
       <span class="pill">EDITAR</span>
     </button>
@@ -486,13 +556,14 @@ Views.dashboard = async () => {
   $('#syncNow').onclick     = () => Sync.syncNow();
 };
 
-/* ---------- 11.2 SÍTIOS (lista) ---------- */
+/* ---------- 12.2 SÍTIOS (lista) ---------- */
 Views.sites = async () => {
   const sites = (await DB.all('sites')).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
 
   App.el.innerHTML = topbar('Sítios & Clientes', '#/') + `
   <main class="view container">
-    <button class="btn primary block" id="newSite">${icon('plus')} Novo Cadastro</button>
+    <button class="btn primary block" id="newSite">${icon('plus')} Novo Cadastro Completo</button>
+    <button class="btn ghost block" id="quickSite">${icon('user')} Cadastro Rápido de Cliente</button>
     <div id="siteList" class="list">
       ${sites.length ? sites.map((s) => `
         <div class="item" data-id="${s.id}">
@@ -508,7 +579,8 @@ Views.sites = async () => {
     </div>
   </main>`;
 
-  $('#newSite').onclick = () => location.hash = '#/site/novo';
+  $('#newSite').onclick  = () => location.hash = '#/site/novo';
+  $('#quickSite').onclick = () => openClientModal(() => { toast('Cliente cadastrado.'); Views.sites(); });
 
   $$('#siteList .item').forEach((el) => {
     el.onclick = (e) => {
@@ -521,14 +593,14 @@ Views.sites = async () => {
     e.stopPropagation();
     const id = b.closest('.item').dataset.id;
     if (await confirmDlg({ title: 'Excluir cadastro?', text: 'Esta ação não pode ser desfeita.', okLabel: 'Excluir', danger: true })){
-      await DB.del('sites', id); /* PERSISTÊNCIA: remoção no IndexedDB */
+      await DB.del('sites', id);
       toast('Cadastro excluído.');
       Views.sites();
     }
   });
 };
 
-/* ---------- 11.3 CADASTRO DE SÍTIO / PISCINA ---------- */
+/* ---------- 12.3 CADASTRO COMPLETO DE SÍTIO ---------- */
 Views.siteForm = async ({ id } = {}) => {
   const site = id ? await DB.get('sites', id) : null;
   const f = site ? { ...site }
@@ -636,19 +708,25 @@ Views.siteForm = async ({ id } = {}) => {
   };
 };
 
-/* ---------- 11.4 VISTORIA (nova + edição de relatório) ---------- */
+/* ---------- 12.4 VISTORIA (nova + edição) ---------- */
 Views.inspection = async ({ siteId, reportId } = {}) => {
   const TASKS = ReportPDF.TASKS;
   const [sites, settings] = await Promise.all([DB.all('sites'), getSettings()]);
   const editSource = reportId ? await DB.get('reports', reportId) : null;
 
+  /* Sem clientes ainda: oferece cadastro completo OU rápido */
   if (!sites.length && !editSource){
     App.el.innerHTML = topbar('Nova Vistoria', '#/') + `
-      <main class="view container">${emptyState('clipboard','Cadastre um sítio primeiro','A vistoria precisa de um cliente selecionado.','#/site/novo','Cadastrar agora')}</main>`;
+      <main class="view container">
+        ${emptyState('clipboard','Cadastre um cliente','A vistoria precisa de um cliente selecionado.','#/site/novo','Cadastro completo')}
+        <button class="btn ghost block" id="quickClientEmpty">${icon('plus')} Cadastro rápido de cliente</button>
+      </main>`;
+    $('#quickClientEmpty').onclick = () =>
+      openClientModal(() => { toast('Cliente cadastrado. Abrindo vistoria…'); App.render(); });
     return;
   }
 
-  /* ---- Fábricas defensivas: nunca retornam null/undefined ---- */
+  /* ---- Fábricas defensivas (nunca retornam null) ---- */
   const taskSet = (src, keys) => {
     const t = {};
     keys.forEach(([k]) => { t[k] = !!(src && src.tasks && src.tasks[k]); });
@@ -667,13 +745,12 @@ Views.inspection = async ({ siteId, reportId } = {}) => {
     photos: photoSet(src)
   }, extra || {});
 
-  /* ---- Rascunho da vistoria (persistido ao finalizar) ---- */
   const draft = {
     siteId: g(editSource, 'siteId',
       (siteId && sites.some((s) => s.id === siteId)) ? siteId : (sites[0] ? sites[0].id : '')),
     dateISO: (editSource ? String(editSource.dateISO).slice(0, 10) : hojeISO()),
     pool: secDraft(editSource && editSource.pool, TASKS.pool, {
-      active: editSource ? !!g(editSource.pool, 'active', false) : true, /* Aba A vem ativa por padrão */
+      active: editSource ? !!g(editSource.pool, 'active', false) : true,
       ph:     String(g(editSource && editSource.pool, 'ph', '')),
       cloro:  String(g(editSource && editSource.pool, 'cloro', '')),
       alcal:  String(g(editSource && editSource.pool, 'alcal', '')),
@@ -762,12 +839,10 @@ Views.inspection = async ({ siteId, reportId } = {}) => {
   <main class="view container">
     <div class="card form">
       <label class="field"><span>Sítio / Cliente</span>
-        <select id="selSite">
-          ${sites.map((s) => `<option value="${s.id}" ${s.id === draft.siteId ? 'selected' : ''}>${esc(s.siteName)} — ${esc(s.ownerName)}</option>`).join('')}
-          ${!sites.some((s) => s.id === draft.siteId) ? `<option value="${esc(draft.siteId)}" selected>Sítio do relatório original</option>` : ''}
-        </select>
+        <select id="selSite"></select>
       </label>
-      <div class="meta-row">
+      <button type="button" class="btn ghost block" id="addClient" style="margin-top:10px">${icon('plus')} Cadastrar Novo Cliente</button>
+      <div class="meta-row" style="margin-top:12px">
         <label class="field" style="max-width:180px"><span>Data da Vistoria</span><input type="date" id="inspDate" value="${draft.dateISO}" max="${hojeISO()}"></label>
         <div class="site-quick" id="siteQuick">${quickChips(curSite())}</div>
       </div>
@@ -785,7 +860,17 @@ Views.inspection = async ({ siteId, reportId } = {}) => {
     <button class="btn primary block big" id="finish">${icon('check')} ${editSource ? 'Salvar Alterações e Regenerar PDF' : 'Finalizar e Gerar Relatório'}</button>
   </main>`;
 
-  /* ---- Recomendações ao vivo (requisito da Aba A) ---- */
+  /* ---- Popula o seletor de clientes (mantém fallback de edição) ---- */
+  function rebuildSelect(){
+    const sel = $('#selSite');
+    sel.innerHTML =
+      sites.map((s) => `<option value="${s.id}" ${s.id === draft.siteId ? 'selected' : ''}>${esc(s.siteName)} — ${esc(s.ownerName)}</option>`).join('') +
+      (!sites.some((s) => s.id === draft.siteId)
+        ? `<option value="${esc(draft.siteId)}" selected>Sítio do relatório original</option>` : '');
+  }
+  rebuildSelect();
+
+  /* ---- Recomendações ao vivo ---- */
   function renderRecs(){
     const box = $('#recBox');
     if (!box) return;
@@ -822,6 +907,17 @@ Views.inspection = async ({ siteId, reportId } = {}) => {
 
   /* ---- Bindings ---- */
   $('#selSite').onchange = (e) => { draft.siteId = e.target.value; refreshSiteInfo(); renderRecs(); };
+
+  /* NOVO: cadastro rápido sem sair da vistoria */
+  $('#addClient').onclick = () => openClientModal((rec) => {
+    sites.push(rec);
+    draft.siteId = rec.id;
+    rebuildSelect();
+    refreshSiteInfo();
+    renderRecs();
+    toast('Cliente cadastrado e selecionado.');
+  });
+
   $('#inspDate').onchange = (e) => { draft.dateISO = e.target.value; };
 
   $$('[data-toggle]').forEach((sw) => sw.onchange = (e) => {
@@ -881,7 +977,6 @@ Views.inspection = async ({ siteId, reportId } = {}) => {
     if (!active.length) return toast('Ative pelo menos uma seção da vistoria.', 'warn');
 
     const s0 = curSite();
-    /* Fallback: sítio original excluído → usa dados do próprio relatório */
     const site = s0 || {
       id: draft.siteId,
       siteName: g(editSource, 'siteName', 'Sítio'),
@@ -896,7 +991,6 @@ Views.inspection = async ({ siteId, reportId } = {}) => {
     btn.innerHTML = '<span class="spin"></span> Salvando…';
 
     try {
-      /* Ao editar: preserva id/código. Ao concluir: novos. */
       const report = editSource
         ? { ...editSource }
         : { id: uid(), code: String(Date.now()).slice(-6), createdAt: Date.now() };
@@ -917,14 +1011,12 @@ Views.inspection = async ({ siteId, reportId } = {}) => {
         synced: false
       });
       if (editSource) report.editedAt = Date.now();
-      delete report.pdfBase64; /* será regenerado abaixo */
+      delete report.pdfBase64;
 
-      /* PERSISTÊNCIA 1/2: o relatório é salvo ANTES do PDF —
-         mesmo se a geração falhar, nada se perde em campo. */
+      /* PERSISTÊNCIA 1/2: relatório salvo ANTES do PDF — nada se perde */
       await DB.put('reports', report);
 
-      /* PERSISTÊNCIA 2/2: PDF (fotos Base64 → JPEG embutido)
-         gerado e guardado como string Base64. */
+      /* PERSISTÊNCIA 2/2: PDF gerado (fotos Base64 → JPEG embutido) */
       let pdfOk = true;
       try {
         btn.innerHTML = '<span class="spin"></span> Gerando PDF…';
@@ -947,7 +1039,7 @@ Views.inspection = async ({ siteId, reportId } = {}) => {
   }
 };
 
-/* ---------- 11.5 HISTÓRICO ---------- */
+/* ---------- 12.5 HISTÓRICO ---------- */
 Views.history = async () => {
   const reports = (await DB.all('reports')).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
 
@@ -986,9 +1078,7 @@ Views.history = async () => {
   });
 };
 
-/* ---------- 11.6 RELATÓRIO GERADO (PDF + compartilhar + editar) ---------- */
-
-/* Garante que exista PDF: regenera sob demanda se necessário */
+/* ---------- 12.6 RELATÓRIO GERADO ---------- */
 async function ensurePdf(r){
   if (r.pdfBase64) return b64ToBlob(r.pdfBase64);
   const site = (await DB.get('sites', r.siteId)) || {
@@ -1007,7 +1097,7 @@ const pdfFileName = (r) => {
   return `NEGRETS-MASTER_${safe}_${String(r.dateISO).slice(0, 10)}.pdf`;
 };
 
-/* WEB SHARE API — envia o PDF direto ao WhatsApp/e-mail do cliente */
+/* WEB SHARE API — envia o PDF direto ao WhatsApp do cliente */
 async function shareReport(r){
   try {
     const blob = await ensurePdf(r);
@@ -1127,7 +1217,58 @@ Views.reportView = async ({ id }) => {
   });
 };
 
-/* ---------- 11.7 AJUSTES DA EMPRESA ---------- */
+/* ---------- 12.7 AJUSTES + DIAGNÓSTICO PWA ---------- */
+
+/* Verifica ao vivo o que está (ou não) impedindo a instalação */
+async function runPwaDiagnostics(){
+  const rows = [];
+  const push = (st, txt) => rows.push({ st, txt });
+
+  /* Service Worker */
+  try {
+    if (!('serviceWorker' in navigator)){
+      push('fail', 'Este navegador não suporta Service Worker.');
+    } else {
+      const reg = await navigator.serviceWorker.getRegistration();
+      if (reg) push(reg.active ? 'ok' : 'warn',
+        reg.active ? 'Service Worker ativo (base do offline).' : 'Service Worker instalando… recarregue a página.');
+      else push('fail', 'Service Worker NÃO registrado — confira se sw.js está na raiz do repositório.');
+    }
+    push(navigator.serviceWorker.controller ? 'ok' : 'warn',
+      navigator.serviceWorker.controller ? 'Página sob controle do SW.' : 'Página ainda não controlada — feche o app e abra de novo.');
+  } catch (e){ push('fail', 'Erro ao verificar o SW: ' + e.message); }
+
+  /* Manifest + ícones (mostra 404 de cada arquivo) */
+  try {
+    const res = await fetch('manifest.json', { cache: 'no-store' });
+    if (!res.ok){
+      push('fail', 'manifest.json não encontrado (HTTP ' + res.status + '). Verifique o nome exato do arquivo.');
+    } else {
+      const man = await res.json();
+      push('ok', 'manifest.json OK — “' + (man.name || man.short_name || '?') + '”.');
+      const icons = Array.isArray(man.icons) ? man.icons : [];
+      if (!icons.length) push('fail', 'O manifest não declara ícones.');
+      for (const ic of icons){
+        try {
+          const r2 = await fetch(ic.src, { cache: 'no-store' });
+          push(r2.ok ? 'ok' : 'fail',
+            (r2.ok ? 'Ícone OK: ' : 'Ícone FALTANDO (HTTP ' + r2.status + '): ') + ic.src);
+        } catch (_){ push('fail', 'Ícone inacessível: ' + ic.src); }
+      }
+      const has192 = icons.some((i) => String(i.sizes || '').includes('192'));
+      const has512 = icons.some((i) => String(i.sizes || '').includes('512'));
+      if (!has192) push('fail', 'Falta um ícone de 192×192 no manifest.');
+      if (!has512) push('warn', 'Recomendado um ícone de 512×512 no manifest.');
+    }
+  } catch (e){ push('fail', 'Falha ao carregar o manifest: ' + e.message); }
+
+  push(deferredPrompt ? 'ok' : 'warn',
+    deferredPrompt
+      ? 'Instalação liberada — use o botão abaixo.'
+      : 'Chrome ainda não liberou a instalação. Corrija os itens em vermelho acima, recarregue e aguarde alguns segundos.');
+  return rows;
+}
+
 Views.settings = async () => {
   const st = await getSettings();
 
@@ -1146,9 +1287,15 @@ Views.settings = async () => {
     </form>
 
     <section class="card form">
-      <h2 style="font-size:.74rem;letter-spacing:.12em;color:var(--pool);text-transform:uppercase;font-weight:800">Aplicativo</h2>
+      <h2 style="font-size:.74rem;letter-spacing:.12em;color:var(--pool);text-transform:uppercase;font-weight:800">Instalação do Aplicativo</h2>
       <button class="btn ghost block" id="installBtn" hidden>${icon('download')} Instalar na tela inicial</button>
       <p class="hint" id="iosHint" hidden>No iPhone: toque em <b>Compartilhar</b> e depois em <b>Adicionar à Tela de Início</b>.</p>
+      <div id="diagList"><p class="hint">Verificando instalação…</p></div>
+      <button class="btn ghost block" id="diagAgain">${icon('shield')} Verificar novamente</button>
+    </section>
+
+    <section class="card form">
+      <h2 style="font-size:.74rem;letter-spacing:.12em;color:var(--pool);text-transform:uppercase;font-weight:800">Dados</h2>
       <button class="btn ghost block" id="wipeBtn" style="color:var(--bad)">${icon('trash')} Apagar todos os dados locais</button>
       <p class="hint">Os dados ficam salvos apenas neste aparelho (IndexedDB), com acesso total offline. Fotos são comprimidas para 1280px/JPEG antes de salvar.</p>
     </section>
@@ -1160,6 +1307,7 @@ Views.settings = async () => {
     toast('Ajustes salvos.');
   };
 
+  /* Botão instalar (aparece quando o Chrome libera) */
   const ib = $('#installBtn');
   if (deferredPrompt){
     ib.hidden = false;
@@ -1174,6 +1322,22 @@ Views.settings = async () => {
     $('#iosHint').hidden = false;
   }
 
+  /* Diagnóstico automático + botão de reverificação */
+  const diagList = $('#diagList');
+  async function renderDiag(){
+    diagList.innerHTML = '<p class="hint">Verificando instalação…</p>';
+    const rows = await runPwaDiagnostics();
+    diagList.innerHTML = rows.map((r) => `
+      <div class="sum-row">
+        <span style="display:flex;align-items:center;gap:8px;color:${r.st === 'fail' ? '#C0362C' : r.st === 'warn' ? '#8A4B08' : 'inherit'}">
+          <i class="sync-dot ${r.st === 'ok' ? 'ok' : 'pend'}" style="${r.st === 'fail' ? 'background:#C0362C' : ''}"></i>${esc(r.txt)}
+        </span>
+      </div>`).join('');
+    if (deferredPrompt) ib.hidden = false;
+  }
+  renderDiag();
+  $('#diagAgain').onclick = renderDiag;
+
   $('#wipeBtn').onclick = async () => {
     if (!await confirmDlg({ title: 'Apagar todos os dados?', text: 'Sítios, relatórios e ajustes deste aparelho serão removidos definitivamente.', okLabel: 'Apagar tudo', danger: true })) return;
     await Promise.all([DB.clear('sites'), DB.clear('reports'), DB.clear('settings')]);
@@ -1183,12 +1347,7 @@ Views.settings = async () => {
 };
 
 /* =========================================================
-   12. MIGRAÇÃO — normaliza relatórios antigos/parciais
-   -----------------------------------------------------------
-   Roda UMA vez no boot: garante que todo relatório tenha
-   tasks/photos/sections/dureza no formato atual, e converte
-   o formato antigo (pdfBlob) para o novo (pdfBase64). Assim
-   nenhuma tela quebra, independentemente da idade do dado.
+   13. MIGRAÇÃO — normaliza relatórios antigos/parciais
    ========================================================= */
 async function normalizeReports(){
   const reports = await DB.all('reports');
@@ -1216,25 +1375,22 @@ async function normalizeReports(){
       r.sections = ['pool', 'site', 'garden'].filter((k) => r[k] && r[k].active);
       changed = true;
     }
-    if (r.pdfBlob){ delete r.pdfBlob; changed = true; } /* formato antigo */
+    if (r.pdfBlob){ delete r.pdfBlob; changed = true; } /* formato muito antigo */
     if (changed) await DB.put('reports', r);
   }
 }
 
 /* =========================================================
-   13. BOOT
+   14. BOOT
    ========================================================= */
 async function init(){
   App.el = $('#app');
-
-  /* Ícones da barra de navegação (index.html usa data-ic) */
   $$('[data-ic]').forEach((el) => { el.outerHTML = icon(el.dataset.ic); });
 
   await DB.open();
-  await normalizeReports(); /* blindagem contra dados antigos */
+  await normalizeReports();
   App.render();
 
-  /* Service Worker → instalação + modo offline */
   if ('serviceWorker' in navigator){
     window.addEventListener('load', () =>
       navigator.serviceWorker.register('./sw.js').catch(console.warn));
