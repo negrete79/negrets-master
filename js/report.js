@@ -1,7 +1,6 @@
 /* =========================================================
-   report.js — Compila a vistoria em um PDF A4 timbrado:
-   cabeçalho da empresa, parâmetros + status, recomendações,
-   checklists, fotos Antes/Depois, observações e assinaturas.
+   report.js — PDF timbrado (v2: Dureza Cálcica + máx. 3
+   fotos por lado/seção para não estourar a memória)
    ========================================================= */
 const ReportPDF = (() => {
   'use strict';
@@ -43,7 +42,6 @@ const ReportPDF = (() => {
     const dtLabel = dt.toLocaleDateString('pt-BR') + ' às ' +
                     dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
 
-    /* ---------- helpers de fluxo ---------- */
     function ensure(h){ if (y + h > H - 92){ d.newPage(); miniHeader(); y = 78; } }
     function miniHeader(){
       d.rect(0, 0, W, 40, NAVY); d.rect(0, 40, W, 2, POOL);
@@ -60,8 +58,8 @@ const ReportPDF = (() => {
     function checkbox(x, yy, done){
       d.roundRect(x, yy, 11, 11, 3, done ? { fill: NAVY } : { stroke: STEEL, lineWidth: 1 });
       if (done){
-        d.line(x + 2.4, yy + 5.6, x + 4.6, yy + 8,   WHITE, 1.5);
-        d.line(x + 4.6, yy + 8,   x + 8.8, yy + 3,   WHITE, 1.5);
+        d.line(x + 2.4, yy + 5.6, x + 4.6, yy + 8, WHITE, 1.5);
+        d.line(x + 4.6, yy + 8,   x + 8.8, yy + 3, WHITE, 1.5);
       }
     }
     function checklist(items){
@@ -79,9 +77,10 @@ const ReportPDF = (() => {
     function statusOf(k, v){
       if (v === '' || v == null || isNaN(parseFloat(v))) return 'none';
       const n = parseFloat(v);
-      if (k === 'ph')    return n < 7.2 ? 'low' : (n > 7.6 ? 'high' : 'ok');
-      if (k === 'cloro') return n < 1   ? 'low' : (n > 3   ? 'high' : 'ok');
-      if (k === 'alcal') return n < 80  ? 'low' : (n > 120 ? 'high' : 'ok');
+      if (k === 'ph')     return n < 7.2 ? 'low' : (n > 7.6 ? 'high' : 'ok');
+      if (k === 'cloro')  return n < 1   ? 'low' : (n > 3   ? 'high' : 'ok');
+      if (k === 'alcal')  return n < 80  ? 'low' : (n > 120 ? 'high' : 'ok');
+      if (k === 'dureza') return n < 200 ? 'low' : (n > 400 ? 'high' : 'ok');
       return 'none';
     }
     function statusPill(st, x, yy){
@@ -114,9 +113,13 @@ const ReportPDF = (() => {
       d.roundRect(x + bw / 2 - cw2 / 2, yy + bh + 4, cw2, 13, 6.5, { fill: capBG });
       d.text(cap, x + bw / 2, yy + bh + 13, { size: 7, bold: true, color: capFG, align: 'center', width: cw2 });
     }
+    /* NOVO: limite de fotos no PDF (as demais ficam salvas no app) */
     function photosBlock(title, ph){
-      const before = (ph && ph.before) || [], after = (ph && ph.after) || [];
-      if (!before.length && !after.length) return;
+      const allB = (ph && ph.before) || [], allA = (ph && ph.after) || [];
+      if (!allB.length && !allA.length) return;
+      const MAXP = 3;
+      const before = allB.slice(0, MAXP), after = allA.slice(0, MAXP);
+      const extra = Math.max(allB.length - MAXP, allA.length - MAXP, 0);
       ensure(30);
       d.text(title, M, y + 8, { size: 8, bold: true, color: NAVY });
       y += 16;
@@ -130,6 +133,11 @@ const ReportPDF = (() => {
         else frameSlot(M + bw + gap, y, bw, bh);
         y += bh + 28;
       }
+      if (extra){
+        ensure(16);
+        d.text(`+ ${extra} foto(s) adicional(is) registrada(s) no aplicativo`, M, y + 8, { size: 8, color: MUT });
+        y += 16;
+      }
       y += 4;
     }
     function chip(label, x, yy){
@@ -139,7 +147,7 @@ const ReportPDF = (() => {
       return x + w;
     }
 
-    /* ============ Página 1 — cabeçalho timbrado ============ */
+    /* ============ Página 1 ============ */
     d.rect(0, 0, W, 112, NAVY);
     d.rect(0, 112, W, 3, POOL);
     d.text(s.companyName || "NEGRET'S MASTER", M, 46, { size: 19, bold: true, color: WHITE });
@@ -161,7 +169,6 @@ const ReportPDF = (() => {
     chips.forEach((t) => { cx = chip(t, cx, y) + 8; });
     y += 30;
 
-    /* ============ Card do cliente ============ */
     d.roundRect(M, y, CW, 84, 12, { fill: BG });
     const col2 = M + CW / 2 + 12, colW = CW / 2 - 28;
     d.text('PROPRIETÁRIO', M + 14, y + 17, { size: 7, bold: true, color: MUT });
@@ -174,7 +181,7 @@ const ReportPDF = (() => {
     d.text(ellip(site.address || '—', 9.5, false, colW), col2, y + 69, { size: 9.5, color: INK });
     y += 104;
 
-    /* ============ Seção A — Parâmetros da Piscina ============ */
+    /* ============ Seção A — com DUREZA CÁLCICA ============ */
     if (report.pool && report.pool.active){
       sectionBar('A', 'PARÂMETROS DA PISCINA');
       if (site.volume){ d.text('Volume de referência: ' + fmtL(site.volume), M, y + 6, { size: 8.5, color: MUT }); y += 18; }
@@ -189,9 +196,10 @@ const ReportPDF = (() => {
       y += 20;
 
       [
-        ['pH da Água',          report.pool.ph,    '7,2 – 7,6', 'ph'],
-        ['Cloro Livre (ppm)',   report.pool.cloro, '1,0 – 3,0', 'cloro'],
-        ['Alcalinidade (ppm)',  report.pool.alcal, '80 – 120',  'alcal']
+        ['pH da Água',            report.pool.ph,     '7,2 – 7,6',  'ph'],
+        ['Cloro Livre (ppm)',     report.pool.cloro,  '1,0 – 3,0',  'cloro'],
+        ['Alcalinidade (ppm)',    report.pool.alcal,  '80 – 120',   'alcal'],
+        ['Dureza Cálcica (ppm)',  report.pool.dureza, '200 – 400',  'dureza']
       ].forEach(([nm, val, ref, k]) => {
         ensure(22);
         d.text(nm, xP, y + 14, { size: 9.5, color: INK });
@@ -203,9 +211,8 @@ const ReportPDF = (() => {
       });
       y += 6;
 
-      /* Recomendações automáticas de dosagem */
       const recs = report.pool.recs || [];
-      const measured = [report.pool.ph, report.pool.cloro, report.pool.alcal]
+      const measured = [report.pool.ph, report.pool.cloro, report.pool.alcal, report.pool.dureza]
         .some((v) => v !== '' && v != null && !isNaN(parseFloat(v)));
       if (recs.length){
         const bh2 = 34 + recs.length * 14;
@@ -231,7 +238,6 @@ const ReportPDF = (() => {
       y += 6;
     }
 
-    /* ============ Seção B — Limpeza do Sítio ============ */
     if (report.site && report.site.active){
       sectionBar('B', 'LIMPEZA DO SÍTIO');
       checklist(TASKS.site.map(([k, l]) => [l, !!(report.site.tasks && report.site.tasks[k])]));
@@ -239,7 +245,6 @@ const ReportPDF = (() => {
       y += 6;
     }
 
-    /* ============ Seção C — Roçada e Jardinagem ============ */
     if (report.garden && report.garden.active){
       sectionBar('C', 'ROÇADA E JARDINAGEM');
       checklist(TASKS.garden.map(([k, l]) => [l, !!(report.garden.tasks && report.garden.tasks[k])]));
@@ -248,7 +253,6 @@ const ReportPDF = (() => {
       y += 6;
     }
 
-    /* ============ Observações gerais + assinaturas ============ */
     notesBox('OBSERVAÇÕES GERAIS', report.generalNotes);
     ensure(96);
     y += 16;
@@ -259,7 +263,6 @@ const ReportPDF = (() => {
     d.text('Assinatura do Cliente — ' + (report.ownerName || ''), sx2, y + 14, { size: 8, color: MUT, align: 'center', width: sw });
     y += 34;
 
-    /* ============ Rodapé em todas as páginas ============ */
     const saveCur = d.cur;
     d.pages.forEach((pg, i) => {
       d.cur = pg;
