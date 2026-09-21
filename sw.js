@@ -15,6 +15,63 @@ const CORE = [
   './js/report.js',
   './js/app.js'
 ];
+/* NEGRET'S MASTER — sw.js (v6) — colar na RAIZ do repositório */
+const VERSION = 'negrets-master-v6';
+
+const CORE = [
+  './',
+  './index.html',
+  './manifest.json',
+  './css/styles.css',
+  './js/db.js',
+  './js/pdf.js',
+  './js/report.js',
+  './js/app.js'
+];
+
+self.addEventListener('install', (event) => {
+  event.waitUntil(
+    caches.open(VERSION)
+      .then((c) => Promise.allSettled(CORE.map((u) => c.add(u))))
+      .then(() => self.skipWaiting())
+  );
+});
+
+self.addEventListener('activate', (event) => {
+  event.waitUntil(
+    caches.keys()
+      .then((ks) => Promise.all(ks.filter((k) => k !== VERSION).map((k) => caches.delete(k))))
+      .then(() => self.clients.claim())
+  );
+});
+
+self.addEventListener('fetch', (event) => {
+  const req = event.request;
+  if (req.method !== 'GET') return;
+
+  if (req.mode === 'navigate') {
+    event.respondWith(
+      caches.match('./index.html').then((c) => c || fetch(req))
+        .catch(() => caches.match('./index.html'))
+    );
+    return;
+  }
+
+  event.respondWith((async () => {
+    const cached = await caches.match(req);
+    if (cached) return cached;
+    try {
+      const res = await fetch(req);
+      if (res && res.ok && new URL(req.url).origin === location.origin) {
+        const clone = res.clone();
+        caches.open(VERSION).then((c) => c.put(req, clone));
+      }
+      return res;
+    } catch (_) {
+      return new Response('', { status: 504 });
+    }
+  })());
+});
 
 /* Ícones são opcionais: se ainda não foram gerados, não travam a instalação do SW */
 const OPTIONAL = ['./icons/icon.svg', './icons/icon-192.png', './icons/icon-512.png', './icons/icon-180.png'];
