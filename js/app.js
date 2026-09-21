@@ -1,12 +1,12 @@
 /* =========================================================
-   NEGRET'S MASTER — js/app.js (v5 — reescrita completa)
+   NEGRET'S MASTER — js/app.js (v6 — arquivo completo)
    -----------------------------------------------------------
-   Novidades da v5:
-   • Cadastro RÁPIDO de cliente dentro da vistoria (modal com
-     litragem ao vivo) — salva no IndexedDB e já seleciona.
-   • Cadastro rápido também na lista de Sítios.
-   • Diagnóstico de Instalação (PWA) em Ajustes: checa SW,
-     manifest e cada ícone, apontando o que impede a instalação.
+   Novidades v6:
+   • LITRAGEM MANUAL: campo "Litragem conhecida (L)" no cadastro
+     completo e no cadastro rápido. Se preenchida, substitui o
+     cálculo pelas dimensões (volumeSource: 'manual').
+   • Diagnóstico PWA tenta registrar o SW na hora e mostra o
+     erro exato se o sw.js estiver ausente/quebrado.
    Estrutura:
    1 CONFIG · 2 UTILS · 3 ÍCONES · 4 TOAST/MODAL · 5 AJUSTES
    6 SINCRONIZAÇÃO · 7 UI HELPERS · 8 FOTOS · 9 CÁLCULOS
@@ -19,13 +19,13 @@
    1. CONFIG
    ========================================================= */
 const CONFIG = {
-  /* URL de nuvem futura (Google Apps Script etc.). Vazio = 100% local. */
+  /* URL de nuvem futura (Apps Script etc.). Vazio = 100% local. */
   SYNC_ENDPOINT: ''
 };
 
-const PHOTO_MAX_DIM = 1280;  /* px do lado maior após compressão */
-const PHOTO_QUALITY = 0.65;  /* qualidade JPEG */
-const MAX_PHOTOS    = 8;     /* por campo (antes/depois de cada seção) */
+const PHOTO_MAX_DIM = 1280;
+const PHOTO_QUALITY = 0.65;
+const MAX_PHOTOS    = 8;
 
 /* =========================================================
    2. UTILITÁRIOS
@@ -59,7 +59,6 @@ const saudacao = () => {
   return h < 12 ? 'Bom dia' : h < 18 ? 'Boa tarde' : 'Boa noite';
 };
 
-/* PDF é persistido como Base64 (texto) — máxima compatibilidade */
 const blobToB64 = (blob) => new Promise((res, rej) => {
   const fr = new FileReader();
   fr.onload = () => res(String(fr.result).split(',')[1]);
@@ -75,12 +74,12 @@ function b64ToBlob(b64){
   return new Blob([u8], { type: 'application/pdf' });
 }
 
-/* Leitura segura de propriedades — nunca lança em null/undefined */
+/* Leitura segura — nunca lança em null/undefined */
 const g = (obj, k, dflt) =>
   (obj && typeof obj === 'object' && obj[k] !== undefined && obj[k] !== null) ? obj[k] : dflt;
 
 /* =========================================================
-   3. ÍCONES (SVG inline — sem CDN, funciona offline)
+   3. ÍCONES
    ========================================================= */
 const ICONS = {
   home:'<path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>',
@@ -155,7 +154,7 @@ function confirmDlg({ title, text, okLabel = 'Confirmar', danger = false }){
 }
 
 /* =========================================================
-   5. AJUSTES DA EMPRESA (store: settings)
+   5. AJUSTES DA EMPRESA
    ========================================================= */
 const DEFAULT_SETTINGS = {
   companyName: "NEGRET'S MASTER",
@@ -172,7 +171,7 @@ const saveSettings = (v) => DB.put('settings', { key: 'company', value: v });
 let deferredPrompt = null;
 
 /* =========================================================
-   6. SINCRONIZAÇÃO (indicador online/offline + envio futuro)
+   6. SINCRONIZAÇÃO
    ========================================================= */
 const netPillHTML = () => '<i class="dot"></i>' + (navigator.onLine ? 'Online' : 'Offline');
 
@@ -188,21 +187,20 @@ const Sync = {
     }
     const pend = (await DB.all('reports')).filter((r) => !r.synced);
     if (!pend.length) return toast('Tudo sincronizado.');
-
     if (!CONFIG.SYNC_ENDPOINT){
       return toast(pend.length + ' relatório(s) salvos localmente. Configure SYNC_ENDPOINT para enviar à nuvem.', 'info', 3800);
     }
     let ok = 0;
     for (const r of pend){
       try {
-        const { pdfBase64, ...json } = r; /* o PDF em si não vai no JSON */
+        const { pdfBase64, ...json } = r;
         const res = await fetch(CONFIG.SYNC_ENDPOINT, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(json)
         });
         if (res.ok){ r.synced = true; await DB.put('reports', r); ok++; }
-      } catch (_) { /* tenta o próximo */ }
+      } catch (_) {}
     }
     toast(ok === pend.length ? ok + ' relatório(s) enviados.' : ok + '/' + pend.length + ' enviados — tente novamente.', ok ? 'ok' : 'warn');
     updateNetUI();
@@ -245,10 +243,7 @@ function animateNumber(el, to, dur = 550){
 }
 
 /* =========================================================
-   8. FOTOS — pipeline leve
-   • Sem atributo "capture": Android/iOS oferecem CÂMERA e GALERIA.
-   • createImageBitmap + .close() → baixo pico de memória.
-   • UMA foto por vez; fallback <img>+canvas p/ navegadores antigos.
+   8. FOTOS — pipeline leve (câmera OU galeria, 1 por vez)
    ========================================================= */
 function legacyCompress(file){
   return new Promise((resolve, reject) => {
@@ -285,7 +280,7 @@ async function compressImage(file){
       c.width  = Math.max(1, Math.round(bmp.width * scale));
       c.height = Math.max(1, Math.round(bmp.height * scale));
       c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
-      if (bmp.close) bmp.close(); /* LIBERA a imagem original da RAM */
+      if (bmp.close) bmp.close();
       const out = c.toDataURL('image/jpeg', PHOTO_QUALITY);
       c.width = c.height = 0;
       return out;
@@ -297,6 +292,7 @@ async function compressImage(file){
 /* =========================================================
    9. CÁLCULOS
    LITRAGEM:  Retangular C×L×P×1000 | Redonda D×D×P×0,785×1000
+   MANUAL:    se o cliente informou a litragem, ela TEM prioridade.
    DOSAGEM:   Cloro <1,0 ppm → Vol×0,004 g | pH >7,6 → Vol×0,007 ml
               Dureza cálcica <200 / >400 ppm → orientação
    ========================================================= */
@@ -309,6 +305,13 @@ function calcVolume(shape, { length = 0, width = 0, diameter = 0, depth = 0 } = 
   if (shape === 'retangular') return C * L * P * 1000;
   if (shape === 'redonda')    return D * D * P * 0.785 * 1000;
   return 0;
+}
+
+/* Prioridade: valor manual do cliente > cálculo pelas dimensões */
+function effectiveVolume(manualStr, shape, dims){
+  const m = parseFloat(manualStr) || 0;
+  if (m > 0) return { volume: Math.round(m), source: 'manual' };
+  return { volume: Math.round(calcVolume(shape, dims)), source: 'calc' };
 }
 
 function computeRecs(vol, cloro, ph, dureza){
@@ -328,8 +331,7 @@ function computeRecs(vol, cloro, ph, dureza){
 }
 
 /* =========================================================
-   10. MODAL "NOVO CLIENTE" (cadastro rápido com litragem)
-   Usado na vistoria e na lista de sítios.
+   10. MODAL "NOVO CLIENTE" (com litragem manual opcional)
    ========================================================= */
 function openClientModal(onSaved){
   const back = document.createElement('div');
@@ -342,13 +344,16 @@ function openClientModal(onSaved){
       <label class="field"><span>Nome do Sítio *</span><input id="qcSite" placeholder="Ex.: Sítio Boa Vista"></label>
       <label class="field"><span>Proprietário *</span><input id="qcOwner" placeholder="Ex.: Roberto Negret"></label>
       <label class="field"><span>Telefone / WhatsApp</span><input id="qcPhone" inputmode="tel" placeholder="(31) 99999-0000"></label>
-      <span class="field-lbl">Formato da Piscina (opcional)</span>
+      <label class="field"><span>Litragem conhecida (L) — opcional</span>
+        <input type="number" step="1" min="0" inputmode="numeric" id="qc_manual" placeholder="Se o cliente já souber, digite aqui"></label>
+      <span class="field-lbl">Formato da Piscina (para cálculo automático)</span>
       <div class="segmented">
         <label><input type="radio" name="qcShape" value="retangular" checked><span>Retangular</span></label>
         <label><input type="radio" name="qcShape" value="redonda"><span>Redonda</span></label>
       </div>
       <div id="qcDims"></div>
       <div class="vol-line">${icon('droplet')}<span>Litragem: <strong id="qcVol">—</strong></span></div>
+      <p class="hint" id="qcSrc">Preencha as dimensões ou a litragem conhecida.</p>
       <div class="modal-actions" style="margin-top:6px">
         <button class="btn ghost" data-a="c">Cancelar</button>
         <button class="btn primary" data-a="s">Salvar Cliente</button>
@@ -357,9 +362,9 @@ function openClientModal(onSaved){
   </div>`;
   document.body.appendChild(back);
 
-  const dims   = $('#qcDims', back);
+  const dims = $('#qcDims', back);
   const shapeVal = () => back.querySelector('input[name="qcShape"]:checked').value;
-  const num    = (k) => { const el = back.querySelector('#qc_' + k); return el ? parseFloat(el.value) || 0 : 0; };
+  const num = (k) => { const el = back.querySelector('#qc_' + k); return el ? parseFloat(el.value) || 0 : 0; };
 
   function renderDims(){
     dims.innerHTML = shapeVal() === 'retangular' ? `
@@ -376,16 +381,21 @@ function openClientModal(onSaved){
   }
 
   function updVol(){
-    /* CÁLCULO em tempo real (mesma fórmula do cadastro completo) */
-    const v = calcVolume(shapeVal(), {
-      length: num('length'), width: num('width'),
-      diameter: num('diameter'), depth: num('depth')
-    });
-    $('#qcVol', back).textContent = v > 0 ? fmt0.format(Math.round(v)) + ' L' : '—';
-    return v;
+    const eff = effectiveVolume(
+      String(num('manual') || ''),
+      shapeVal(),
+      { length: num('length'), width: num('width'), diameter: num('diameter'), depth: num('depth') }
+    );
+    $('#qcVol', back).textContent = eff.volume > 0 ? fmt0.format(eff.volume) + ' L' : '—';
+    $('#qcSrc', back).textContent =
+      eff.source === 'manual' ? 'Litragem informada pelo cliente (tem prioridade sobre o cálculo).'
+      : eff.volume > 0        ? 'Cálculo automático pelas dimensões.'
+      : 'Preencha as dimensões ou a litragem conhecida.';
+    return eff;
   }
 
   back.querySelectorAll('input[name="qcShape"]').forEach((r) => r.addEventListener('change', renderDims));
+  $('#qc_manual', back).addEventListener('input', updVol);
   renderDims();
 
   back.addEventListener('click', async (e) => {
@@ -400,6 +410,7 @@ function openClientModal(onSaved){
     const ownerName = $('#qcOwner', back).value.trim();
     if (!siteName || !ownerName) return toast('Preencha sítio e proprietário.', 'warn');
 
+    const eff = updVol();
     const rec = {
       id: uid(),
       ownerName, siteName,
@@ -409,18 +420,19 @@ function openClientModal(onSaved){
       poolShape: shapeVal(),
       length: String(num('length') || ''), width: String(num('width') || ''),
       diameter: String(num('diameter') || ''), depth: String(num('depth') || ''),
-      volume: Math.round(updVol()),
+      manualVolume: num('manual') > 0 ? String(num('manual')) : '',
+      volume: eff.volume,
+      volumeSource: eff.source,
       createdAt: Date.now(), updatedAt: Date.now()
     };
-    /* PERSISTÊNCIA: novo cliente gravado no IndexedDB */
-    await DB.put('sites', rec);
+    await DB.put('sites', rec); /* PERSISTÊNCIA: IndexedDB */
     back.remove();
     onSaved(rec);
   });
 }
 
 /* =========================================================
-   11. ROUTER (SPA por hash)
+   11. ROUTER
    ========================================================= */
 const App = {
   el: null,
@@ -505,7 +517,6 @@ Views.dashboard = async () => {
       </span>
       <span class="pill">COMEÇAR</span>
     </button>
-
     <button class="card act" id="goHistorico">
       <span class="act-ic">${icon('folder')}</span>
       <span class="act-tx">
@@ -516,17 +527,15 @@ Views.dashboard = async () => {
       <span class="pill">ACESSAR</span>
       ${pending ? `<span class="bubble">${pending}</span>` : ''}
     </button>
-
     <button class="card act" id="goSites">
       <span class="act-ic">${icon('pin')}</span>
       <span class="act-tx">
         <small>CADASTRO</small>
         <strong>SÍTIOS &amp; CLIENTES</strong>
-        <em>${sites.length} cadastrado${sites.length === 1 ? '' : 's'} • litragem automática</em>
+        <em>${sites.length} cadastrado${sites.length === 1 ? '' : 's'} • litragem manual ou automática</em>
       </span>
       <span class="pill">GERENCIAR</span>
     </button>
-
     <button class="card act" id="goAjustes">
       <span class="act-ic">${icon('gear')}</span>
       <span class="act-tx">
@@ -536,7 +545,6 @@ Views.dashboard = async () => {
       </span>
       <span class="pill">EDITAR</span>
     </button>
-
     <section class="sync-strip">
       <div>
         ${icon(navigator.onLine ? 'wifi' : 'wifioff')}
@@ -556,7 +564,7 @@ Views.dashboard = async () => {
   $('#syncNow').onclick     = () => Sync.syncNow();
 };
 
-/* ---------- 12.2 SÍTIOS (lista) ---------- */
+/* ---------- 12.2 SÍTIOS ---------- */
 Views.sites = async () => {
   const sites = (await DB.all('sites')).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
 
@@ -579,7 +587,7 @@ Views.sites = async () => {
     </div>
   </main>`;
 
-  $('#newSite').onclick  = () => location.hash = '#/site/novo';
+  $('#newSite').onclick   = () => location.hash = '#/site/novo';
   $('#quickSite').onclick = () => openClientModal(() => { toast('Cliente cadastrado.'); Views.sites(); });
 
   $$('#siteList .item').forEach((el) => {
@@ -588,7 +596,6 @@ Views.sites = async () => {
       location.hash = '#/site/' + el.dataset.id;
     };
   });
-
   $$('#siteList .del').forEach((b) => b.onclick = async (e) => {
     e.stopPropagation();
     const id = b.closest('.item').dataset.id;
@@ -600,11 +607,11 @@ Views.sites = async () => {
   });
 };
 
-/* ---------- 12.3 CADASTRO COMPLETO DE SÍTIO ---------- */
+/* ---------- 12.3 CADASTRO COMPLETO (com litragem manual) ---------- */
 Views.siteForm = async ({ id } = {}) => {
   const site = id ? await DB.get('sites', id) : null;
   const f = site ? { ...site }
-                 : { poolType: 'fibra', poolShape: 'retangular', length: '', width: '', diameter: '', depth: '' };
+                 : { poolType: 'fibra', poolShape: 'retangular', length: '', width: '', diameter: '', depth: '', manualVolume: '' };
 
   App.el.innerHTML = topbar(site ? 'Editar Sítio' : 'Novo Sítio', '#/sites') + `
   <main class="view container">
@@ -619,6 +626,10 @@ Views.siteForm = async ({ id } = {}) => {
 
       <div class="form-sec">
         <h2>Dados da Piscina</h2>
+        <label class="field"><span>Litragem conhecida (L) — opcional</span>
+          <input type="number" step="1" min="0" inputmode="numeric" name="manualVolume" value="${esc(f.manualVolume || '')}" placeholder="Se o cliente já souber, digite aqui"></label>
+        <p class="hint" id="manualHint">Se preenchida, esta litragem <b>substitui o cálculo</b> pelas dimensões.</p>
+
         <span class="field-lbl">Tipo de Piscina</span>
         <div class="segmented">
           ${['Fibra','Vinil','Alvenaria'].map((t) => `
@@ -638,9 +649,9 @@ Views.siteForm = async ({ id } = {}) => {
             <div class="tank-marks"><i></i><i></i><i></i><i></i></div>
           </div>
           <div class="gauge-tx">
-            <span class="gauge-lbl">LITRAGEM CALCULADA</span>
+            <span class="gauge-lbl">LITRAGEM</span>
             <strong><b id="volNum" data-v="0">0</b><i>Litros</i></strong>
-            <span class="gauge-hint">Cálculo automático conforme as dimensões</span>
+            <span class="gauge-hint" id="volSrc"></span>
           </div>
         </div>
       </div>
@@ -651,6 +662,10 @@ Views.siteForm = async ({ id } = {}) => {
 
   const poolFields = $('#poolFields');
   const shape = () => $('#siteForm input[name="poolShape"]:checked').value;
+  const manualVal = () => {
+    const el = $('#siteForm [name="manualVolume"]');
+    return el ? el.value : '';
+  };
 
   function renderFields(){
     poolFields.innerHTML = shape() === 'retangular' ? `
@@ -667,18 +682,23 @@ Views.siteForm = async ({ id } = {}) => {
     updateVolume();
   }
 
-  function currentVolume(){
+  function calcDims(){
     const v = (k) => { const el = $('#siteForm [name="' + k + '"]'); return el ? parseFloat(el.value) || 0 : 0; };
-    return calcVolume(shape(), { length: v('length'), width: v('width'), diameter: v('diameter'), depth: v('depth') });
+    return { length: v('length'), width: v('width'), diameter: v('diameter'), depth: v('depth') };
   }
 
   function updateVolume(){
-    const vol = currentVolume();
-    animateNumber($('#volNum'), Math.round(vol));
-    $('#tankWater').style.height = vol > 0 ? (18 + Math.min(82, Math.log10(Math.max(vol, 10)) / 5 * 82)) + '%' : '0%';
+    const eff = effectiveVolume(manualVal(), shape(), calcDims());
+    animateNumber($('#volNum'), eff.volume);
+    $('#tankWater').style.height = eff.volume > 0 ? (18 + Math.min(82, Math.log10(Math.max(eff.volume, 10)) / 5 * 82)) + '%' : '0%';
+    $('#volSrc').textContent =
+      eff.source === 'manual' ? 'Valor informado pelo cliente (prioritário).'
+      : eff.volume > 0        ? 'Cálculo automático conforme as dimensões.'
+      : 'Informe as dimensões ou a litragem conhecida.';
   }
 
   $$('#siteForm input[name="poolShape"]').forEach((r) => r.addEventListener('change', renderFields));
+  $('#siteForm [name="manualVolume"]').addEventListener('input', updateVolume);
   renderFields();
 
   $('#siteForm').onsubmit = async (e) => {
@@ -687,7 +707,10 @@ Views.siteForm = async ({ id } = {}) => {
     if (!String(data.ownerName || '').trim() || !String(data.siteName || '').trim())
       return toast('Preencha proprietário e nome do sítio.', 'warn');
 
-    /* PERSISTÊNCIA: perfil completo (com litragem) no IndexedDB */
+    /* PERSISTÊNCIA: perfil completo no IndexedDB, com origem da litragem */
+    const eff = effectiveVolume(data.manualVolume || '', data.poolShape, {
+      length: data.length, width: data.width, diameter: data.diameter, depth: data.depth
+    });
     const rec = {
       id: f.id || uid(),
       ownerName: data.ownerName.trim(),
@@ -698,7 +721,9 @@ Views.siteForm = async ({ id } = {}) => {
       poolShape: data.poolShape,
       length: data.length || '', width: data.width || '',
       diameter: data.diameter || '', depth: data.depth || '',
-      volume: Math.round(currentVolume()),
+      manualVolume: (parseFloat(data.manualVolume) > 0) ? String(data.manualVolume) : '',
+      volume: eff.volume,
+      volumeSource: eff.source,
       createdAt: f.createdAt || Date.now(),
       updatedAt: Date.now()
     };
@@ -714,7 +739,6 @@ Views.inspection = async ({ siteId, reportId } = {}) => {
   const [sites, settings] = await Promise.all([DB.all('sites'), getSettings()]);
   const editSource = reportId ? await DB.get('reports', reportId) : null;
 
-  /* Sem clientes ainda: oferece cadastro completo OU rápido */
   if (!sites.length && !editSource){
     App.el.innerHTML = topbar('Nova Vistoria', '#/') + `
       <main class="view container">
@@ -726,7 +750,6 @@ Views.inspection = async ({ siteId, reportId } = {}) => {
     return;
   }
 
-  /* ---- Fábricas defensivas (nunca retornam null) ---- */
   const taskSet = (src, keys) => {
     const t = {};
     keys.forEach(([k]) => { t[k] = !!(src && src.tasks && src.tasks[k]); });
@@ -770,13 +793,15 @@ Views.inspection = async ({ siteId, reportId } = {}) => {
 
   const volLabel = () => {
     const v = refVolume();
-    return v ? fmt0.format(v) + ' L' : 'não calculada';
+    if (!v) return 'não calculada';
+    const s = curSite();
+    return fmt0.format(v) + ' L' + (s && s.volumeSource === 'manual' ? ' • informada' : '');
   };
 
   const quickChips = (s) => !s ? '' : [
     `<span>${icon('user')}${esc(s.ownerName)}</span>`,
     s.phone  ? `<span>${icon('phone')}${esc(s.phone)}</span>` : '',
-    s.volume ? `<span>${icon('droplet')}${fmt0.format(s.volume)} L</span>` : ''
+    s.volume ? `<span>${icon('droplet')}${fmt0.format(s.volume)} L${s.volumeSource === 'manual' ? ' •' : ''}</span>` : ''
   ].filter(Boolean).join('');
 
   const checkGrid = (sec, items) => items.map(([k, lbl]) => `
@@ -860,7 +885,6 @@ Views.inspection = async ({ siteId, reportId } = {}) => {
     <button class="btn primary block big" id="finish">${icon('check')} ${editSource ? 'Salvar Alterações e Regenerar PDF' : 'Finalizar e Gerar Relatório'}</button>
   </main>`;
 
-  /* ---- Popula o seletor de clientes (mantém fallback de edição) ---- */
   function rebuildSelect(){
     const sel = $('#selSite');
     sel.innerHTML =
@@ -870,14 +894,13 @@ Views.inspection = async ({ siteId, reportId } = {}) => {
   }
   rebuildSelect();
 
-  /* ---- Recomendações ao vivo ---- */
   function renderRecs(){
     const box = $('#recBox');
     if (!box) return;
     const recs = computeRecs(refVolume(), draft.pool.cloro, draft.pool.ph, draft.pool.dureza);
     const touched = ['cloro','ph','alcal','dureza'].some((k) => draft.pool[k] !== '');
     if (!refVolume() && touched){
-      box.innerHTML = `<div class="alert warn">${icon('alert')}<span>Cadastre a litragem do sítio para calcular a dosagem automaticamente.</span></div>`;
+      box.innerHTML = `<div class="alert warn">${icon('alert')}<span>Cadastre a litragem do sítio (dimensões ou valor informado) para calcular a dosagem.</span></div>`;
     } else if (recs.length){
       box.innerHTML = `<div class="alert warn"><ul>${recs.map((r) => `<li>${icon('droplet')}<span>${esc(r.text)}</span></li>`).join('')}</ul></div>`;
     } else if (touched){
@@ -905,10 +928,8 @@ Views.inspection = async ({ siteId, reportId } = {}) => {
     });
   }
 
-  /* ---- Bindings ---- */
   $('#selSite').onchange = (e) => { draft.siteId = e.target.value; refreshSiteInfo(); renderRecs(); };
 
-  /* NOVO: cadastro rápido sem sair da vistoria */
   $('#addClient').onclick = () => openClientModal((rec) => {
     sites.push(rec);
     draft.siteId = rec.id;
@@ -954,7 +975,7 @@ Views.inspection = async ({ siteId, reportId } = {}) => {
         break;
       }
       try {
-        draft[sec].photos[kind].push(await compressImage(file)); /* 1 por vez */
+        draft[sec].photos[kind].push(await compressImage(file));
         renderThumbs(slot, sec, kind);
       } catch (_){
         toast('Não foi possível processar esta imagem. Tente pela galeria.', 'warn', 3600);
@@ -968,7 +989,6 @@ Views.inspection = async ({ siteId, reportId } = {}) => {
   $$('.photo-slot').forEach((slot) =>
     renderThumbs(slot, slot.dataset.sec, slot.dataset.kind));
 
-  /* ---- Finalização: salva → gera PDF → persiste o PDF ---- */
   const finishHTML = $('#finish').innerHTML;
 
   async function finalizar(){
@@ -1013,16 +1033,14 @@ Views.inspection = async ({ siteId, reportId } = {}) => {
       if (editSource) report.editedAt = Date.now();
       delete report.pdfBase64;
 
-      /* PERSISTÊNCIA 1/2: relatório salvo ANTES do PDF — nada se perde */
-      await DB.put('reports', report);
+      await DB.put('reports', report); /* 1/2: relatório salvo antes do PDF */
 
-      /* PERSISTÊNCIA 2/2: PDF gerado (fotos Base64 → JPEG embutido) */
       let pdfOk = true;
       try {
         btn.innerHTML = '<span class="spin"></span> Gerando PDF…';
         const blob = await ReportPDF.build(report, site, settings);
         report.pdfBase64 = await blobToB64(blob);
-        await DB.put('reports', report);
+        await DB.put('reports', report); /* 2/2: PDF persistido */
       } catch (err){
         pdfOk = false;
         console.error('Falha na geração do PDF:', err);
@@ -1053,7 +1071,7 @@ Views.history = async () => {
             <strong>${esc(r.siteName || 'Relatório')}</strong>
             <span>${fmtDateBR(r.dateISO)} • ${(r.sections || []).map(labelSec).join(' + ')}${r.editedAt ? ' • editado' : ''}</span>
           </div>
-          <span class="sync-dot ${r.synced ? 'ok' : 'pend'}" title="${r.synced ? 'Sincronizado' : 'Pendente de sincronização'}"></span>
+          <span class="sync-dot ${r.synced ? 'ok' : 'pend'}" title="${r.synced ? 'Sincronizado' : 'Pendente'}"></span>
           <button class="del" aria-label="Excluir">${icon('trash')}</button>
         </div>`).join('')
       : emptyState('file', 'Nenhuma vistoria registrada', 'Os relatórios gerados aparecem aqui — mesmo sem internet.')}
@@ -1066,7 +1084,6 @@ Views.history = async () => {
       location.hash = '#/relatorio/' + el.dataset.id;
     };
   });
-
   $$('.item.rep .del').forEach((b) => b.onclick = async (e) => {
     e.stopPropagation();
     const id = b.closest('.item').dataset.id;
@@ -1097,7 +1114,6 @@ const pdfFileName = (r) => {
   return `NEGRETS-MASTER_${safe}_${String(r.dateISO).slice(0, 10)}.pdf`;
 };
 
-/* WEB SHARE API — envia o PDF direto ao WhatsApp do cliente */
 async function shareReport(r){
   try {
     const blob = await ensurePdf(r);
@@ -1217,55 +1233,75 @@ Views.reportView = async ({ id }) => {
   });
 };
 
-/* ---------- 12.7 AJUSTES + DIAGNÓSTICO PWA ---------- */
-
-/* Verifica ao vivo o que está (ou não) impedindo a instalação */
+/* ---------- 12.7 AJUSTES + DIAGNÓSTICO PWA REFORÇADO ---------- */
 async function runPwaDiagnostics(){
   const rows = [];
   const push = (st, txt) => rows.push({ st, txt });
 
-  /* Service Worker */
-  try {
-    if (!('serviceWorker' in navigator)){
-      push('fail', 'Este navegador não suporta Service Worker.');
-    } else {
-      const reg = await navigator.serviceWorker.getRegistration();
-      if (reg) push(reg.active ? 'ok' : 'warn',
-        reg.active ? 'Service Worker ativo (base do offline).' : 'Service Worker instalando… recarregue a página.');
-      else push('fail', 'Service Worker NÃO registrado — confira se sw.js está na raiz do repositório.');
-    }
-    push(navigator.serviceWorker.controller ? 'ok' : 'warn',
-      navigator.serviceWorker.controller ? 'Página sob controle do SW.' : 'Página ainda não controlada — feche o app e abra de novo.');
-  } catch (e){ push('fail', 'Erro ao verificar o SW: ' + e.message); }
+  if (!('serviceWorker' in navigator)){
+    push('fail', 'Este navegador não suporta Service Worker.');
+    return rows;
+  }
 
-  /* Manifest + ícones (mostra 404 de cada arquivo) */
+  /* Tenta registrar AGORA — sem depender de recarregamento */
+  let reg = null;
+  try { reg = await navigator.serviceWorker.getRegistration(); } catch (_) {}
+  if (!reg){
+    try {
+      reg = await navigator.serviceWorker.register('./sw.js');
+      push('ok', 'Service Worker registrado com sucesso agora.');
+    } catch (e){
+      push('fail', 'Falha ao registrar sw.js: ' + ((e && e.message) || e) +
+        ' — confirme que o arquivo sw.js existe NA RAIZ do repositório.');
+    }
+  }
+  if (reg){
+    push(reg.active ? 'ok' : 'warn',
+      reg.active ? 'Service Worker ativo (base do offline).' : 'Service Worker instalando… verifique de novo em alguns segundos.');
+  }
+  push(navigator.serviceWorker.controller ? 'ok' : 'warn',
+    navigator.serviceWorker.controller ? 'Página sob controle do SW.' : 'Página ainda não controlada — feche o app e abra de novo.');
+
+  /* sw.js existe e é servido? */
+  try {
+    const r3 = await fetch('sw.js', { cache: 'no-store' });
+    if (!r3.ok){
+      push('fail', 'sw.js NÃO encontrado (HTTP ' + r3.status + ') — crie o arquivo na RAIZ.');
+    } else {
+      const t = await r3.text();
+      push(/addEventListener/.test(t) ? 'ok' : 'warn',
+        'sw.js servido (' + t.length + ' bytes)' + (/addEventListener/.test(t) ? ' e parece válido.' : ', mas verifique o conteúdo.'));
+    }
+  } catch (_){ push('fail', 'sw.js inacessível.'); }
+
+  /* manifest + ícones (data URI também é verificado) */
   try {
     const res = await fetch('manifest.json', { cache: 'no-store' });
     if (!res.ok){
-      push('fail', 'manifest.json não encontrado (HTTP ' + res.status + '). Verifique o nome exato do arquivo.');
+      push('fail', 'manifest.json não encontrado (HTTP ' + res.status + ').');
     } else {
       const man = await res.json();
       push('ok', 'manifest.json OK — “' + (man.name || man.short_name || '?') + '”.');
       const icons = Array.isArray(man.icons) ? man.icons : [];
       if (!icons.length) push('fail', 'O manifest não declara ícones.');
       for (const ic of icons){
+        if (String(ic.src).startsWith('data:')){
+          push('ok', 'Ícone embutido (data URI) presente — sem risco de 404.');
+          continue;
+        }
         try {
           const r2 = await fetch(ic.src, { cache: 'no-store' });
           push(r2.ok ? 'ok' : 'fail',
             (r2.ok ? 'Ícone OK: ' : 'Ícone FALTANDO (HTTP ' + r2.status + '): ') + ic.src);
         } catch (_){ push('fail', 'Ícone inacessível: ' + ic.src); }
       }
-      const has192 = icons.some((i) => String(i.sizes || '').includes('192'));
-      const has512 = icons.some((i) => String(i.sizes || '').includes('512'));
-      if (!has192) push('fail', 'Falta um ícone de 192×192 no manifest.');
-      if (!has512) push('warn', 'Recomendado um ícone de 512×512 no manifest.');
     }
   } catch (e){ push('fail', 'Falha ao carregar o manifest: ' + e.message); }
 
   push(deferredPrompt ? 'ok' : 'warn',
     deferredPrompt
-      ? 'Instalação liberada — use o botão abaixo.'
-      : 'Chrome ainda não liberou a instalação. Corrija os itens em vermelho acima, recarregue e aguarde alguns segundos.');
+      ? 'Instalação liberada — use o botão acima.'
+      : 'Chrome libera a instalação quando TODOS os itens vermelhos forem corrigidos. Aguarde alguns segundos e verifique novamente.');
   return rows;
 }
 
@@ -1307,7 +1343,6 @@ Views.settings = async () => {
     toast('Ajustes salvos.');
   };
 
-  /* Botão instalar (aparece quando o Chrome libera) */
   const ib = $('#installBtn');
   if (deferredPrompt){
     ib.hidden = false;
@@ -1322,7 +1357,6 @@ Views.settings = async () => {
     $('#iosHint').hidden = false;
   }
 
-  /* Diagnóstico automático + botão de reverificação */
   const diagList = $('#diagList');
   async function renderDiag(){
     diagList.innerHTML = '<p class="hint">Verificando instalação…</p>';
@@ -1347,7 +1381,7 @@ Views.settings = async () => {
 };
 
 /* =========================================================
-   13. MIGRAÇÃO — normaliza relatórios antigos/parciais
+   13. MIGRAÇÃO — normaliza relatórios/sítios antigos
    ========================================================= */
 async function normalizeReports(){
   const reports = await DB.all('reports');
@@ -1375,8 +1409,17 @@ async function normalizeReports(){
       r.sections = ['pool', 'site', 'garden'].filter((k) => r[k] && r[k].active);
       changed = true;
     }
-    if (r.pdfBlob){ delete r.pdfBlob; changed = true; } /* formato muito antigo */
+    if (r.pdfBlob){ delete r.pdfBlob; changed = true; }
     if (changed) await DB.put('reports', r);
+  }
+
+  /* Sítios antigos ganham os campos de litragem manual */
+  const sites = await DB.all('sites');
+  for (const s of sites){
+    let ch = false;
+    if (typeof s.manualVolume === 'undefined'){ s.manualVolume = ''; ch = true; }
+    if (typeof s.volumeSource === 'undefined'){ s.volumeSource = s.volume ? 'calc' : 'calc'; ch = true; }
+    if (ch) await DB.put('sites', s);
   }
 }
 
@@ -1392,8 +1435,11 @@ async function init(){
   App.render();
 
   if ('serviceWorker' in navigator){
-    window.addEventListener('load', () =>
-      navigator.serviceWorker.register('./sw.js').catch(console.warn));
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('./sw.js')
+        .then((reg) => console.log('[NEGRET\'S] SW registrado:', reg.scope))
+        .catch((err) => console.error('[NEGRET\'S] SW falhou:', err));
+    });
   }
 }
 
