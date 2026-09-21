@@ -367,4 +367,505 @@ Views.siteForm = async ({ id } = {}) => {
 
   App.el.innerHTML = topbar(site ? 'Editar Sítio' : 'Novo Sítio', '#/sites') + `
   <main class="view container">
-    <form id="si
+    <form id="siteForm" class="card form" novalidate>
+      <div class="form-sec">
+        <h2>Dados do Cliente</h2>
+        <label class="field"><span>Nome do Proprietário *</span><input name="ownerName" required value="${esc(f.ownerName || '')}" placeholder="Ex.: Roberto Negret"></label>
+        <label class="field"><span>Nome do Sítio *</span><input name="siteName" required value="${esc(f.siteName || '')}" placeholder="Ex.: Sítio Boa Vista"></label>
+        <label class="field"><span>Telefone / WhatsApp</span><input name="phone" inputmode="tel" value="${esc(f.phone || '')}" placeholder="(44) 99999-0000"></label>
+        <label class="field"><span>Endereço</span><input name="address" value="${esc(f.address || '')}" placeholder="Rua, distrito, cidade"></label>
+      </div>
+
+      <div class="form-sec">
+        <h2>Dados da Piscina</h2>
+        <span class="field-lbl">Tipo de Piscina</span>
+        <div class="segmented">
+          ${['Fibra','Vinil','Alvenaria'].map((t) => `
+            <label><input type="radio" name="poolType" value="${t.toLowerCase()}" ${f.poolType === t.toLowerCase() ? 'checked' : ''}><span>${t}</span></label>`).join('')}
+        </div>
+        <span class="field-lbl">Formato</span>
+        <div class="segmented">
+          <label><input type="radio" name="poolShape" value="retangular" ${f.poolShape !== 'redonda' ? 'checked' : ''}><span>Retangular</span></label>
+          <label><input type="radio" name="poolShape" value="redonda" ${f.poolShape === 'redonda' ? 'checked' : ''}><span>Redonda</span></label>
+        </div>
+
+        <div id="poolFields"></div>
+
+        <div class="gauge">
+          <div class="tank" aria-hidden="true">
+            <div class="tank-water" id="tankWater"><span class="bub b1"></span><span class="bub b2"></span></div>
+            <div class="tank-marks"><i></i><i></i><i></i><i></i></div>
+          </div>
+          <div class="gauge-tx">
+            <span class="gauge-lbl">LITRAGEM CALCULADA</span>
+            <strong><b id="volNum" data-v="0">0</b><i>Litros</i></strong>
+            <span class="gauge-hint">Cálculo automático conforme as dimensões</span>
+          </div>
+        </div>
+      </div>
+
+      <button class="btn primary block" type="submit">${site ? icon('check') + ' Salvar Alterações' : icon('plus') + ' Salvar Sítio'}</button>
+    </form>
+  </main>`;
+
+  const poolFields = $('#poolFields');
+  const shape = () => $('#siteForm input[name="poolShape"]:checked').value;
+
+  function renderFields(){
+    const s = shape();
+    poolFields.innerHTML = s === 'retangular' ? `
+      <div class="grid3">
+        <label class="field"><span>Comprimento (m)</span><input type="number" step="0.1" min="0" inputmode="decimal" name="length" value="${esc(f.length || '')}" placeholder="0,0"></label>
+        <label class="field"><span>Largura (m)</span><input type="number" step="0.1" min="0" inputmode="decimal" name="width" value="${esc(f.width || '')}" placeholder="0,0"></label>
+        <label class="field"><span>Prof. Média (m)</span><input type="number" step="0.1" min="0" inputmode="decimal" name="depth" value="${esc(f.depth || '')}" placeholder="0,0"></label>
+      </div>` : `
+      <div class="grid2">
+        <label class="field"><span>Diâmetro (m)</span><input type="number" step="0.1" min="0" inputmode="decimal" name="diameter" value="${esc(f.diameter || '')}" placeholder="0,0"></label>
+        <label class="field"><span>Prof. Média (m)</span><input type="number" step="0.1" min="0" inputmode="decimal" name="depth" value="${esc(f.depth || '')}" placeholder="0,0"></label>
+      </div>`;
+    $$('#poolFields input').forEach((i) => i.addEventListener('input', updateVolume));
+    updateVolume();
+  }
+
+  function currentVolume(){
+    const v = (k) => parseFloat(($('#siteForm [name="' + k + '"]') || {}).value) || 0;
+    return calcVolume(shape(), { length: v('length'), width: v('width'), diameter: v('diameter'), depth: v('depth') });
+  }
+  function updateVolume(){
+    const vol = currentVolume();
+    animateNumber($('#volNum'), Math.round(vol));
+    $('#tankWater').style.height = vol > 0 ? (18 + Math.min(82, Math.log10(Math.max(vol, 10)) / 5 * 82)) + '%' : '0%';
+  }
+
+  $$('#siteForm input[name="poolShape"]').forEach((r) => r.addEventListener('change', renderFields));
+  renderFields();
+
+  $('#siteForm').onsubmit = async (e) => {
+    e.preventDefault();
+    const data = Object.fromEntries(new FormData(e.target).entries());
+    if (!String(data.ownerName || '').trim() || !String(data.siteName || '').trim())
+      return toast('Preencha proprietário e nome do sítio.', 'warn');
+
+    /* PERSISTÊNCIA OFFLINE: grava o perfil completo (com litragem) no IndexedDB */
+    const rec = {
+      id: f.id || uid(),
+      ownerName: data.ownerName.trim(), siteName: data.siteName.trim(),
+      phone: data.phone || '', address: data.address || '',
+      poolType: data.poolType, poolShape: data.poolShape,
+      length: data.length || '', width: data.width || '', diameter: data.diameter || '', depth: data.depth || '',
+      volume: Math.round(currentVolume()),
+      createdAt: f.createdAt || Date.now(), updatedAt: Date.now()
+    };
+    await DB.put('sites', rec);
+    toast('Sítio salvo no aparelho.');
+    location.hash = '#/sites';
+  };
+};
+
+/* ---------- 4. VISTORIA UNIFICADA (Abas A / B / C) ---------- */
+Views.inspection = async ({ siteId } = {}) => {
+  const [sites, settings] = await Promise.all([DB.all('sites'), getSettings()]);
+  const TASKS = ReportPDF.TASKS;
+
+  if (!sites.length){
+    App.el.innerHTML = topbar('Nova Vistoria', '#/') + `
+      <main class="view container">
+        ${emptyState('clipboard', 'Cadastre um sítio primeiro', 'A vistoria precisa de um cliente selecionado.', '#/site/novo', 'Cadastrar agora')}
+      </main>`;
+    return;
+  }
+
+  /* Rascunho em memória — persistido no IndexedDB ao finalizar */
+  const draft = {
+    siteId: siteId && sites.some((s) => s.id === siteId) ? siteId : sites[0].id,
+    dateISO: hojeISO(),
+    pool:   { active: true,  ph: '', cloro: '', alcal: '', tasks: { aspiracao:false, peneira:false, escovacao:false, filtro:false }, photos: { before: [], after: [] } },
+    site:   { active: false, tasks: { churrasqueira:false, varandas:false, banheiros:false, lixo:false }, photos: { before: [], after: [] } },
+    garden: { active: false, tasks: { entrada:false, piscina:false, pomar:false, campo:false }, notes: '', photos: { before: [], after: [] } },
+    generalNotes: ''
+  };
+
+  const curSite  = () => sites.find((s) => s.id === draft.siteId);
+  const volLabel = () => { const s = curSite(); return s && s.volume ? fmt0.format(s.volume) + ' L' : 'não calculada'; };
+  const quickChips = (s) => !s ? '' : [
+    `<span>${icon('user')}${esc(s.ownerName)}</span>`,
+    s.phone  ? `<span>${icon('phone')}${esc(s.phone)}</span>` : '',
+    s.volume ? `<span>${icon('droplet')}${fmt0.format(s.volume)} L</span>` : ''
+  ].join('');
+
+  const checkGrid = (sec, items) => items.map(([k, lbl]) => `
+    <label class="chk">
+      <input type="checkbox" data-sec="${sec}" data-key="${k}" ${draft[sec].tasks[k] ? 'checked' : ''}>
+      <span class="box">${icon('check')}</span><span>${lbl}</span>
+    </label>`).join('');
+
+  const photoSlot = (sec, kind, label) => `
+    <div class="photo-slot" data-sec="${sec}" data-kind="${kind}">
+      <div class="photo-head"><span>${label}</span>
+        <button type="button" class="btn small ghost cam">${icon('camera')} ${kind === 'before' ? 'Foto Antes' : 'Foto Depois'}</button>
+      </div>
+      <div class="thumbs" data-thumbs></div>
+      <input type="file" accept="image/*" capture="environment" multiple hidden data-file>
+    </div>`;
+
+  const poolBody = () => `
+    <div class="vol-line">${icon('droplet')}<span>Litragem do sítio: <strong id="volChip">${volLabel()}</strong></span></div>
+    <div class="grid3">
+      <label class="field"><span>pH</span><input type="number" step="0.1" min="0" max="14" inputmode="decimal" data-meas="ph" value="${draft.pool.ph}" placeholder="7,4"></label>
+      <label class="field"><span>Cloro (ppm)</span><input type="number" step="0.1" min="0" inputmode="decimal" data-meas="cloro" value="${draft.pool.cloro}" placeholder="1,5"></label>
+      <label class="field"><span>Alcalinidade</span><input type="number" step="1" min="0" inputmode="numeric" data-meas="alcal" value="${draft.pool.alcal}" placeholder="100"></label>
+    </div>
+    <div class="ref-chips"><span>pH ideal 7,2–7,6</span><span>Cloro 1,0–3,0 ppm</span><span>Alc. 80–120 ppm</span></div>
+    <div id="recBox"></div>
+    <span class="field-lbl">Tarefas Executadas</span>
+    <div class="chk-grid">${checkGrid('pool', TASKS.pool)}</div>
+    <div class="photo-row">${photoSlot('pool', 'before', 'ANTES')}${photoSlot('pool', 'after', 'DEPOIS')}</div>`;
+
+  const siteBody = () => `
+    <span class="field-lbl">Tarefas Executadas</span>
+    <div class="chk-grid">${checkGrid('site', TASKS.site)}</div>
+    <div class="photo-row">${photoSlot('site', 'before', 'ANTES')}${photoSlot('site', 'after', 'DEPOIS')}</div>`;
+
+  const gardenBody = () => `
+    <span class="field-lbl">Áreas Roçadas</span>
+    <div class="chk-grid">${checkGrid('garden', TASKS.garden)}</div>
+    <label class="field"><span>Observações da Roçada</span>
+      <textarea id="gardenNotes" rows="2" placeholder="Ex.: mato alto próximo ao pomar…">${esc(draft.garden.notes)}</textarea></label>
+    <div class="photo-row">${photoSlot('garden', 'before', 'ANTES')}${photoSlot('garden', 'after', 'DEPOIS')}</div>`;
+
+  const secCard = (key, letter, accent, title, sub, body) => `
+    <section class="card sec ${draft[key].active ? 'on' : 'off'}" data-sec-card="${key}">
+      <header class="sec-head">
+        <span class="sec-ic ${accent}">${letter}</span>
+        <div><strong>${title}</strong><em>${sub}</em></div>
+        <label class="switch"><input type="checkbox" data-toggle="${key}" ${draft[key].active ? 'checked' : ''}><span></span></label>
+      </header>
+      <div class="sec-body">${body}</div>
+    </section>`;
+
+  App.el.innerHTML = topbar('Nova Vistoria', '#/') + `
+  <main class="view container">
+    <div class="card form">
+      <label class="field"><span>Sítio / Cliente</span>
+        <select id="selSite">
+          ${sites.map((s) => `<option value="${s.id}" ${s.id === draft.siteId ? 'selected' : ''}>${esc(s.siteName)} — ${esc(s.ownerName)}</option>`).join('')}
+        </select>
+      </label>
+      <div class="meta-row">
+        <label class="field" style="max-width:180px"><span>Data da Vistoria</span><input type="date" id="inspDate" value="${draft.dateISO}" max="${hojeISO()}"></label>
+        <div class="site-quick" id="siteQuick">${quickChips(curSite())}</div>
+      </div>
+    </div>
+
+    ${secCard('pool', 'A', 'a', 'Parâmetros da Piscina', 'pH, cloro, alcalinidade, tarefas e fotos', poolBody())}
+    ${secCard('site', 'B', 'b', 'Limpeza do Sítio', 'Churrasqueira, varandas, banheiros e lixo', siteBody())}
+    ${secCard('garden', 'C', 'c', 'Roçada e Jardinagem', 'Áreas roçadas e observações', gardenBody())}
+
+    <div class="card form">
+      <label class="field"><span>Observações Gerais da Visita</span>
+        <textarea id="genNotes" rows="2" placeholder="Algo mais para registrar?">${esc(draft.generalNotes)}</textarea></label>
+    </div>
+
+    <button class="btn primary block big" id="finish">${icon('check')} Finalizar e Gerar Relatório</button>
+  </main>`;
+
+  /* ---- Recomendações ao vivo ---- */
+  function renderRecs(){
+    const box = $('#recBox'); if (!box) return;
+    const vol = (curSite() && curSite().volume) || 0;
+    const recs = computeRecs(vol, draft.pool.cloro, draft.pool.ph);
+    const touched = draft.pool.cloro !== '' || draft.pool.ph !== '' || draft.pool.alcal !== '';
+    if (!vol && touched){
+      box.innerHTML = `<div class="alert warn">${icon('alert')}<span>Cadastre a litragem do sítio para calcular a dosagem automaticamente.</span></div>`;
+    } else if (recs.length){
+      box.innerHTML = `<div class="alert warn"><ul>${recs.map((r) => `<li>${icon('droplet')}<span>${esc(r.text)}</span></li>`).join('')}</ul></div>`;
+    } else if (touched){
+      box.innerHTML = `<div class="alert ok">${icon('check')}<span>Parâmetros dentro da faixa ideal. Nenhuma dosagem necessária.</span></div>`;
+    } else box.innerHTML = '';
+  }
+  function refreshSiteInfo(){
+    $('#volChip').textContent = volLabel();
+    $('#siteQuick').innerHTML = quickChips(curSite());
+  }
+  function renderThumbs(slot, sec, kind){
+    const wrapEl = slot.querySelector('[data-thumbs]');
+    wrapEl.innerHTML = draft[sec].photos[kind].map((d, i) => `
+      <figure class="thumb"><img src="${d}" alt=""><button type="button" class="rm" data-i="${i}">${icon('x')}</button></figure>`).join('');
+    $$('.rm', wrapEl).forEach((b) => b.onclick = () => {
+      draft[sec].photos[kind].splice(+b.dataset.i, 1);
+      renderThumbs(slot, sec, kind);
+    });
+  }
+
+  /* ---- Bindings ---- */
+  $('#selSite').onchange = (e) => { draft.siteId = e.target.value; refreshSiteInfo(); renderRecs(); };
+  $('#inspDate').onchange = (e) => draft.dateISO = e.target.value;
+  $$('[data-toggle]').forEach((sw) => sw.onchange = (e) => {
+    const key = e.target.dataset.toggle;
+    draft[key].active = e.target.checked;
+    const card = $(`[data-sec-card="${key}"]`);
+    card.classList.toggle('off', !e.target.checked);
+    card.classList.toggle('on', e.target.checked);
+  });
+  $$('[data-meas]').forEach((i) => i.oninput = (e) => {
+    draft.pool[e.target.dataset.meas] = e.target.value;
+    renderRecs();
+  });
+  $$('.chk input').forEach((c) => c.onchange = (e) => {
+    draft[e.target.dataset.sec].tasks[e.target.dataset.key] = e.target.checked;
+  });
+  $('#gardenNotes').addEventListener('input', (e) => draft.garden.notes = e.target.value);
+  $('#genNotes').addEventListener('input', (e) => draft.generalNotes = e.target.value);
+  $$('.cam').forEach((b) => b.onclick = () => b.closest('.photo-slot').querySelector('[data-file]').click());
+  $$('[data-file]').forEach((inp) => inp.onchange = async (e) => {
+    const slot = inp.closest('.photo-slot');
+    const sec = slot.dataset.sec, kind = slot.dataset.kind;
+    const files = [...inp.files]; inp.value = '';
+    for (const fLe of files){
+      try { draft[sec].photos[kind].push(await compressImage(fLe)); }
+      catch (_) { toast('Não foi possível processar a imagem.', 'warn'); }
+    }
+    renderThumbs(slot, sec, kind);
+    if (files.length) toast(files.length + ' foto(s) adicionada(s).');
+  });
+  $('#finish').onclick = finalizar;
+
+  refreshSiteInfo();
+  renderRecs();
+
+  /* ---- Finalização: salva → gera PDF → guarda o Blob ---- */
+  const finishHTML = $('#finish').innerHTML;
+  async function finalizar(){
+    if (!draft.siteId) return toast('Selecione o sítio.', 'warn');
+    const active = ['pool', 'site', 'garden'].filter((k) => draft[k].active);
+    if (!active.length) return toast('Ative pelo menos uma seção da vistoria.', 'warn');
+
+    const site = curSite();
+    const btn = $('#finish');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spin"></span> Gerando PDF…';
+    try {
+      const report = {
+        id: uid(),
+        code: String(Date.now()).slice(-6),
+        siteId: site.id, siteName: site.siteName, ownerName: site.ownerName,
+        dateISO: draft.dateISO + 'T' + new Date().toTimeString().slice(0, 5),
+        sections: active,
+        pool: { ...draft.pool, volume: site.volume || 0, recs: computeRecs(site.volume || 0, draft.pool.cloro, draft.pool.ph) },
+        site: draft.site, garden: draft.garden,
+        generalNotes: draft.generalNotes,
+        synced: false, createdAt: Date.now()
+      };
+      /* PERSISTÊNCIA OFFLINE 1/2: o relatório é salvo imediatamente no IndexedDB… */
+      await DB.put('reports', report);
+      /* …2/2: depois o PDF é gerado (fotos Base64 → JPEG embutido) e o Blob
+         também é armazenado, para reenviar pelo WhatsApp a qualquer momento. */
+      report.pdfBlob = await ReportPDF.build(report, site, settings);
+      await DB.put('reports', report);
+
+      toast('Relatório gerado e salvo offline.');
+      location.hash = '#/relatorio/' + report.id;
+    } catch (err){
+      console.error(err);
+      toast('Erro ao gerar o relatório.', 'warn');
+      btn.disabled = false;
+      btn.innerHTML = finishHTML;
+    }
+  }
+};
+
+/* ---------- 5. HISTÓRICO ---------- */
+Views.history = async () => {
+  const reports = (await DB.all('reports')).sort((a, b) => b.createdAt - a.createdAt);
+  App.el.innerHTML = topbar('Histórico de Relatórios', '#/') + `
+  <main class="view container">
+    <div class="list">
+      ${reports.length ? reports.map((r) => `
+        <div class="item rep" data-id="${r.id}">
+          <span class="item-ic">${icon('file')}</span>
+          <div class="item-tx">
+            <strong>${esc(r.siteName)}</strong>
+            <span>${new Date(r.dateISO).toLocaleDateString('pt-BR')} • ${r.sections.map(labelSec).join(' + ')}</span>
+          </div>
+          <span class="sync-dot ${r.synced ? 'ok' : 'pend'}" title="${r.synced ? 'Sincronizado' : 'Pendente de sincronização'}"></span>
+          <button class="del" aria-label="Excluir">${icon('trash')}</button>
+        </div>`).join('')
+      : emptyState('file', 'Nenhuma vistoria registrada', 'Os relatórios gerados aparecem aqui — mesmo sem internet.')}
+    </div>
+  </main>`;
+
+  $$('.item.rep').forEach((el) => {
+    el.onclick = (e) => { if (e.target.closest('.del')) return; location.hash = '#/relatorio/' + el.dataset.id; };
+  });
+  $$('.item.rep .del').forEach((b) => b.onclick = async (e) => {
+    e.stopPropagation();
+    const id = b.closest('.item').dataset.id;
+    if (await confirmDlg({ title: 'Excluir relatório?', text: 'O PDF e os registros desta visita serão apagados.', okLabel: 'Excluir', danger: true })){
+      await DB.del('reports', id);
+      toast('Relatório excluído.');
+      Views.history();
+    }
+  });
+};
+
+/* ---------- 6. RELATÓRIO GERADO (compartilhar / baixar) ---------- */
+async function getPdfBlob(r){
+  if (r.pdfBlob instanceof Blob) return r.pdfBlob;
+  const site = (await DB.get('sites', r.siteId)) || {};
+  const st = await getSettings();
+  const blob = await ReportPDF.build(r, site, st);
+  r.pdfBlob = blob;
+  await DB.put('reports', r);
+  return blob;
+}
+async function shareReport(r){
+  try {
+    const blob = await getPdfBlob(r);
+    const safeName = (r.siteName || 'relatorio').replace(/\s+/g, '-').replace(/[^\w-]/g, '');
+    const file = new File([blob], `NEGRET'S-MASTER_${safeName}_${r.dateISO.slice(0, 10)}.pdf`, { type: 'application/pdf' });
+    /* WEB SHARE API — compartilha o PDF direto no WhatsApp/e-mail do cliente */
+    if (navigator.canShare && navigator.canShare({ files: [file] })){
+      await navigator.share({ files: [file], title: 'Relatório ' + r.siteName, text: 'Segue o relatório de serviços.' });
+    } else {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = file.name; a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+      toast('Compartilhamento nativo indisponível — PDF baixado.', 'info');
+    }
+  } catch (e){
+    if (e && e.name !== 'AbortError') toast('Não foi possível compartilhar.', 'warn');
+  }
+}
+Views.reportView = async ({ id }) => {
+  const r = await DB.get('reports', id);
+  if (!r){ location.hash = '#/historico'; return; }
+
+  const photoCount = ['pool', 'site', 'garden']
+    .filter((k) => r[k] && r[k].active)
+    .reduce((acc, k) => acc + ((r[k].photos && r[k].photos.before.length) || 0) + ((r[k].photos && r[k].photos.after.length) || 0), 0);
+
+  const rows = [];
+  if (r.pool && r.pool.active){
+    rows.push(['pH / Cloro / Alcalinidade', [r.pool.ph || '—', r.pool.cloro || '—', r.pool.alcal || '—'].join('  /  ')]);
+    const done = ReportPDF.TASKS.pool.filter(([k]) => r.pool.tasks && r.pool.tasks[k]).map(([, l]) => l);
+    rows.push(['Tarefas da piscina', done.length ? done.join(', ') : '—']);
+  }
+  if (r.site && r.site.active){
+    const done = ReportPDF.TASKS.site.filter(([k]) => r.site.tasks && r.site.tasks[k]).map(([, l]) => l);
+    rows.push(['Limpeza do sítio', done.length ? done.join(', ') : '—']);
+  }
+  if (r.garden && r.garden.active){
+    const done = ReportPDF.TASKS.garden.filter(([k]) => r.garden.tasks && r.garden.tasks[k]).map(([, l]) => l);
+    rows.push(['Roçada', done.length ? done.join(', ') : '—']);
+  }
+
+  App.el.innerHTML = topbar('Relatório Nº ' + r.code, '#/historico') + `
+  <main class="view container">
+    <section class="card done-card">
+      <span class="done-check">${checkSVG}</span>
+      <h2>Relatório pronto!</h2>
+      <p>${esc(r.siteName)} • ${dataBR(r.dateISO.slice(0, 10))}</p>
+      <div class="chips">${r.sections.map((k) => `<span>${labelSec(k)}</span>`).join('')}</div>
+    </section>
+
+    <button class="btn primary block big" id="shareBtn">${icon('share')} Compartilhar PDF (WhatsApp)</button>
+    <div class="row2">
+      <button class="btn ghost block" id="openBtn">${icon('file')} Visualizar</button>
+      <button class="btn ghost block" id="downBtn">${icon('download')} Baixar</button>
+    </div>
+    <button class="btn ghost block" id="againBtn">${icon('plus')} Nova Vistoria</button>
+
+    <section class="card sum">
+      <h3>RESUMO DA VISITA</h3>
+      ${rows.map(([k, v]) => `<div class="sum-row"><span>${k}</span><b>${esc(v)}</b></div>`).join('')}
+      <div class="sum-row"><span>Fotos anexadas</span><b>${photoCount}</b></div>
+      ${r.generalNotes ? `<p class="hint">${esc(r.generalNotes)}</p>` : ''}
+    </section>
+  </main>`;
+
+  $('#shareBtn').onclick = () => shareReport(r);
+  $('#againBtn').onclick = () => location.hash = '#/vistoria';
+  $('#openBtn').onclick = async () => {
+    const url = URL.createObjectURL(await getPdfBlob(r));
+    const w = window.open(url, '_blank');
+    if (!w){ const a = document.createElement('a'); a.href = url; a.download = 'relatorio.pdf'; a.click(); }
+  };
+  $('#downBtn').onclick = async () => {
+    const blob = await getPdfBlob(r);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'relatorio-' + r.code + '.pdf'; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+  };
+};
+
+/* ---------- 7. AJUSTES DA EMPRESA ---------- */
+Views.settings = async () => {
+  const st = await getSettings();
+  App.el.innerHTML = topbar('Ajustes da Empresa', '#/') + `
+  <main class="view container">
+    <form id="setForm" class="card form">
+      <div class="form-sec">
+        <h2>Identidade da Empresa</h2>
+        <label class="field"><span>Nome da Empresa</span><input name="companyName" value="${esc(st.companyName)}"></label>
+        <label class="field"><span>Assinatura / Ramo</span><input name="tagline" value="${esc(st.tagline)}"></label>
+        <label class="field"><span>Telefone</span><input name="phone" inputmode="tel" value="${esc(st.phone)}"></label>
+        <label class="field"><span>E-mail</span><input name="email" type="email" value="${esc(st.email)}"></label>
+        <label class="field"><span>Nome do Técnico</span><input name="technician" value="${esc(st.technician)}" placeholder="Aparece na saudação e no PDF"></label>
+      </div>
+      <button class="btn primary block" type="submit">${icon('check')} Salvar Ajustes</button>
+    </form>
+
+    <section class="card form">
+      <h2 style="font-size:.74rem;letter-spacing:.12em;color:var(--pool);text-transform:uppercase;font-weight:800">Aplicativo</h2>
+      <button class="btn ghost block" id="installBtn" hidden>${icon('download')} Instalar na tela inicial</button>
+      <p class="hint" id="iosHint" hidden>No iPhone: toque em <b>Compartilhar</b> e depois em <b>Adicionar à Tela de Início</b>.</p>
+      <button class="btn ghost block" id="wipeBtn" style="color:var(--bad)">${icon('trash')} Apagar todos os dados locais</button>
+      <p class="hint">Os dados ficam salvos apenas neste aparelho (IndexedDB), com acesso total offline. A sincronização com a nuvem pode ser ativada em <b>CONFIG.SYNC_ENDPOINT</b> (js/app.js).</p>
+    </section>
+  </main>`;
+
+  $('#setForm').onsubmit = async (e) => {
+    e.preventDefault();
+    const data = Object.fromEntries(new FormData(e.target).entries());
+    await saveSettings(data); /* PERSISTÊNCIA: ajustes no IndexedDB */
+    toast('Ajustes salvos.');
+  };
+
+  const ib = $('#installBtn');
+  if (deferredPrompt){
+    ib.hidden = false;
+    ib.onclick = async () => {
+      deferredPrompt.prompt();
+      const c = await deferredPrompt.userChoice;
+      if (c.outcome === 'accepted') toast('Aplicativo instalado!');
+      deferredPrompt = null; ib.hidden = true;
+    };
+  } else if (/iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream){
+    $('#iosHint').hidden = false;
+  }
+
+  $('#wipeBtn').onclick = async () => {
+    if (!await confirmDlg({ title: 'Apagar todos os dados?', text: 'Sítios, relatórios e ajustes deste aparelho serão removidos definitivamente.', okLabel: 'Apagar tudo', danger: true })) return;
+    await Promise.all([DB.clear('sites'), DB.clear('reports'), DB.clear('settings')]);
+    toast('Dados apagados.');
+    location.hash = '#/';
+  };
+};
+
+/* ================= BOOT ================= */
+async function init(){
+  App.el = $('#app');
+  $$('[data-ic]').forEach((el) => { el.outerHTML = icon(el.dataset.ic); });
+  await DB.open();
+  App.render();
+
+  /* Service Worker → instalação e modo offline */
+  if ('serviceWorker' in navigator){
+    window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(console.warn));
+  }
+}
+window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); deferredPrompt = e; });
+window.addEventListener('appinstalled', () => toast('NEGRET&rsquo;S MASTER instalado!'));
+document.addEventListener('DOMContentLoaded', init);
