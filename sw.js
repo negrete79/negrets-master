@@ -1,35 +1,24 @@
 /* =========================================================
-   NEGRET'S MASTER — sw.js (v10 — reescrita completa)
+   NEGRET'S MASTER — sw.js (v11 — reescrita completa)
    -----------------------------------------------------------
-   Missão dupla:
-   1) INSTALABILIDADE — o gerador de WebAPK do Android valida
-      o manifest; os ícones PNG da raiz são pré-cacheados aqui
-      também, então o app instalado abre offline de primeira.
-   2) OFFLINE — App Shell inteiro em cache na instalação.
+   Consistência total com o repositório REAL: o único ícone
+   PNG existente na raiz é icon-maskable-512.png (confirmado
+   pelo diagnóstico do app). Ele é o pré-cacheado e o único
+   referenciado em todo o sistema — 404 de ícone impossível.
 
    Estratégias:
-   • Navegação  → REDE primeiro (app se atualiza sozinho),
-                  cache como reserva (modo avião).
-   • Assets     → CACHE primeiro + revalidação em 2º plano
-                  (resposta instantânea, versão fresca depois).
-   • Fontes     → cacheadas após a 1ª visita.
-
-   Segurança:
-   • Pré-cache com add() individual + Promise.allSettled:
-     um arquivo faltando NÃO derruba a instalação do SW —
-     o faltante é nomeado no console.
-   • Só entra no cache resposta válida (200 ou opaca).
-   • GET apenas; Range requests ignorados.
+   • Navegação → rede primeiro, cache como reserva (offline).
+   • Assets    → cache primeiro + revalidação em 2º plano.
+   • Pré-cache com add() individual: arquivo faltando não
+     derruba a instalação do SW; o faltante é nomeado no log.
    ========================================================= */
 
 'use strict';
 
-/* Suba este número SEMPRE que publicar alteração em qualquer
-   arquivo do app. A ativação apaga caches de versões antigas. */
-const VERSION = 'negrets-master-v10';
+/* Suba este número a cada publicação de alteração. */
+const VERSION = 'negrets-master-v11';
 
-/* ---------- App Shell — reflete EXATAMENTE o repositório.
-   Ícones na RAIZ (sem pasta icons/). ------------------------ */
+/* ---------- App Shell — espelha EXATAMENTE o repositório ---------- */
 const APP_SHELL = [
   './',
   './index.html',
@@ -39,10 +28,7 @@ const APP_SHELL = [
   './js/pdf.js',
   './js/report.js',
   './js/app.js',
-  './icon-192.png',
-  './icon-512.png',
-  './icon-maskable-512.png',
-  './icon-180.png'
+  './icon-maskable-512.png'
 ];
 
 const ALLOWED_ORIGINS = new Set([
@@ -67,9 +53,9 @@ self.addEventListener('install', (event) => {
       .filter(Boolean);
 
     if (failures.length) {
-      console.warn('[SW v10] Pré-cache com falhas — arquivos faltando no repositório:', failures);
+      console.warn('[SW v11] Pré-cache com falhas — arquivos faltando:', failures);
     } else {
-      console.log('[SW v10] App Shell completo em cache:', APP_SHELL.length, 'arquivos.');
+      console.log('[SW v11] App Shell completo em cache:', APP_SHELL.length, 'arquivos.');
     }
 
     await self.skipWaiting();
@@ -83,7 +69,7 @@ self.addEventListener('activate', (event) => {
   event.waitUntil((async () => {
     const keys = await caches.keys();
     await Promise.all(keys.filter((k) => k !== VERSION).map((k) => caches.delete(k)));
-    console.log('[SW v10] Ativo — caches antigos removidos.');
+    console.log('[SW v11] Ativo — caches antigos removidos.');
     await self.clients.claim();
   })());
 });
@@ -101,8 +87,8 @@ self.addEventListener('message', (event) => {
 self.addEventListener('fetch', (event) => {
   const req = event.request;
 
-  if (req.method !== 'GET') return;           /* POST/PUT vão à rede   */
-  if (req.headers.has('range')) return;       /* mídia parcial: ignora */
+  if (req.method !== 'GET') return;
+  if (req.headers.has('range')) return;
 
   const url = new URL(req.url);
   if (!ALLOWED_ORIGINS.has(url.origin)) return;
@@ -114,7 +100,6 @@ self.addEventListener('fetch', (event) => {
   event.respondWith(handleAsset(req));
 });
 
-/* ---------- Navegação: rede primeiro, cache como reserva ---------- */
 async function handleNavigation(req){
   try {
     const fresh = await fetch(req);
@@ -128,7 +113,6 @@ async function handleNavigation(req){
   }
 }
 
-/* ---------- Assets: cache primeiro + revalidação silenciosa ---------- */
 async function handleAsset(req){
   const cached = await caches.match(req);
   if (cached) {
@@ -152,16 +136,15 @@ function revalidate(req){
     if (isCacheable(res)) {
       caches.open(VERSION).then((c) => c.put(req, res.clone()));
     }
-  }).catch(() => { /* offline: cache continua válido */ });
+  }).catch(() => { /* offline: cache segue válido */ });
 }
 
 function isCacheable(res){
   if (!res) return false;
   if (res.ok) return true;
-  return res.type === 'opaque'; /* fontes cross-origin sem CORS exposto */
+  return res.type === 'opaque';
 }
 
-/* ---------- Contingência (só se até o index sumir do cache) ---------- */
 function offlineFallback(){
   return new Response(
     '<!DOCTYPE html><html lang="pt-BR"><meta charset="utf-8">' +
