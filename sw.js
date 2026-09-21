@@ -1,5 +1,5 @@
 /* =========================================================
-   NEGRET'S MASTER — sw.js (v7 — reescrita completa)
+   NEGRET'S MASTER — sw.js (v8— reescrita completa)
    -----------------------------------------------------------
    Papel: tornar o app 100% offline e INSTALÁVEL.
 
@@ -31,7 +31,7 @@
 /* ---------- Identidade do cache ----------
    Suba este número SEMPRE que alterar qualquer arquivo do app.
    Ao ativar, todos os caches de versões antigas são apagados. */
-const VERSION = 'negrets-master-v7';
+const VERSION = 'negrets-master-v8';
 
 /* ---------- App Shell ----------
    O mínimo para o app abrir e operar offline.
