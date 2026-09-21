@@ -1,12 +1,16 @@
 /* =========================================================
-   NEGRET'S MASTER — js/app.js (v6 — arquivo completo)
+   NEGRET'S MASTER — js/app.js (v8 — reescrita completa)
    -----------------------------------------------------------
-   Novidades v6:
-   • LITRAGEM MANUAL: campo "Litragem conhecida (L)" no cadastro
-     completo e no cadastro rápido. Se preenchida, substitui o
-     cálculo pelas dimensões (volumeSource: 'manual').
-   • Diagnóstico PWA tenta registrar o SW na hora e mostra o
-     erro exato se o sw.js estiver ausente/quebrado.
+   Novidades v8:
+   • APP_VERSION visível em Ajustes → fim da dúvida "qual
+     versão está rodando no celular?".
+   • Diagnóstico PWA fiel: tenta registrar o sw.js na hora e
+     mostra o erro real; não falha por PNG ausente quando o
+     Chrome já liberou a instalação.
+   • Botão Instalar com try/catch e feedback (aceito/cancelado/
+     erro) — antes, falhava silenciosamente.
+   • NOVO: "Forçar atualização dos arquivos" — limpa caches e
+     Service Workers MANTENDO os dados (IndexedDB intacto).
    Estrutura:
    1 CONFIG · 2 UTILS · 3 ÍCONES · 4 TOAST/MODAL · 5 AJUSTES
    6 SINCRONIZAÇÃO · 7 UI HELPERS · 8 FOTOS · 9 CÁLCULOS
@@ -18,6 +22,8 @@
 /* =========================================================
    1. CONFIG
    ========================================================= */
+const APP_VERSION = '8.0.0'; /* aparece em Ajustes — suba a cada publicação */
+
 const CONFIG = {
   /* URL de nuvem futura (Apps Script etc.). Vazio = 100% local. */
   SYNC_ENDPOINT: ''
@@ -59,6 +65,7 @@ const saudacao = () => {
   return h < 12 ? 'Bom dia' : h < 18 ? 'Boa tarde' : 'Boa noite';
 };
 
+/* PDF é persistido como Base64 (texto) — máxima compatibilidade */
 const blobToB64 = (blob) => new Promise((res, rej) => {
   const fr = new FileReader();
   fr.onload = () => res(String(fr.result).split(',')[1]);
@@ -79,7 +86,7 @@ const g = (obj, k, dflt) =>
   (obj && typeof obj === 'object' && obj[k] !== undefined && obj[k] !== null) ? obj[k] : dflt;
 
 /* =========================================================
-   3. ÍCONES
+   3. ÍCONES (SVG inline — sem CDN, funciona offline)
    ========================================================= */
 const ICONS = {
   home:'<path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>',
@@ -104,7 +111,8 @@ const ICONS = {
   user:'<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
   phone:'<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>',
   edit:'<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4z"/>',
-  shield:'<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>'
+  shield:'<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
+  refresh:'<polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>'
 };
 const icon = (name) =>
   `<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ''}</svg>`;
@@ -154,7 +162,7 @@ function confirmDlg({ title, text, okLabel = 'Confirmar', danger = false }){
 }
 
 /* =========================================================
-   5. AJUSTES DA EMPRESA
+   5. AJUSTES DA EMPRESA (store: settings)
    ========================================================= */
 const DEFAULT_SETTINGS = {
   companyName: "NEGRET'S MASTER",
@@ -171,7 +179,7 @@ const saveSettings = (v) => DB.put('settings', { key: 'company', value: v });
 let deferredPrompt = null;
 
 /* =========================================================
-   6. SINCRONIZAÇÃO
+   6. SINCRONIZAÇÃO (indicador online/offline + envio futuro)
    ========================================================= */
 const netPillHTML = () => '<i class="dot"></i>' + (navigator.onLine ? 'Online' : 'Offline');
 
@@ -193,7 +201,7 @@ const Sync = {
     let ok = 0;
     for (const r of pend){
       try {
-        const { pdfBase64, ...json } = r;
+        const { pdfBase64, ...json } = r; /* o PDF em si não vai no JSON */
         const res = await fetch(CONFIG.SYNC_ENDPOINT, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -243,7 +251,10 @@ function animateNumber(el, to, dur = 550){
 }
 
 /* =========================================================
-   8. FOTOS — pipeline leve (câmera OU galeria, 1 por vez)
+   8. FOTOS — pipeline leve
+   • Sem atributo "capture": Android/iOS oferecem CÂMERA e GALERIA.
+   • createImageBitmap + .close() → baixo pico de memória.
+   • UMA foto por vez; fallback <img>+canvas p/ navegadores antigos.
    ========================================================= */
 function legacyCompress(file){
   return new Promise((resolve, reject) => {
@@ -292,7 +303,7 @@ async function compressImage(file){
 /* =========================================================
    9. CÁLCULOS
    LITRAGEM:  Retangular C×L×P×1000 | Redonda D×D×P×0,785×1000
-   MANUAL:    se o cliente informou a litragem, ela TEM prioridade.
+   MANUAL:    valor informado pelo cliente TEM prioridade.
    DOSAGEM:   Cloro <1,0 ppm → Vol×0,004 g | pH >7,6 → Vol×0,007 ml
               Dureza cálcica <200 / >400 ppm → orientação
    ========================================================= */
@@ -307,7 +318,7 @@ function calcVolume(shape, { length = 0, width = 0, diameter = 0, depth = 0 } = 
   return 0;
 }
 
-/* Prioridade: valor manual do cliente > cálculo pelas dimensões */
+/* Prioridade: litragem manual do cliente > cálculo pelas dimensões */
 function effectiveVolume(manualStr, shape, dims){
   const m = parseFloat(manualStr) || 0;
   if (m > 0) return { volume: Math.round(m), source: 'manual' };
@@ -331,7 +342,7 @@ function computeRecs(vol, cloro, ph, dureza){
 }
 
 /* =========================================================
-   10. MODAL "NOVO CLIENTE" (com litragem manual opcional)
+   10. MODAL "NOVO CLIENTE" (cadastro rápido + litragem manual)
    ========================================================= */
 function openClientModal(onSaved){
   const back = document.createElement('div');
@@ -388,7 +399,7 @@ function openClientModal(onSaved){
     );
     $('#qcVol', back).textContent = eff.volume > 0 ? fmt0.format(eff.volume) + ' L' : '—';
     $('#qcSrc', back).textContent =
-      eff.source === 'manual' ? 'Litragem informada pelo cliente (tem prioridade sobre o cálculo).'
+      eff.source === 'manual' ? 'Litragem informada pelo cliente (prioritária).'
       : eff.volume > 0        ? 'Cálculo automático pelas dimensões.'
       : 'Preencha as dimensões ou a litragem conhecida.';
     return eff;
@@ -541,7 +552,7 @@ Views.dashboard = async () => {
       <span class="act-tx">
         <small>CONFIGURAÇÕES</small>
         <strong>AJUSTES GERAIS</strong>
-        <em>Dados da empresa, técnico e diagnóstico de instalação</em>
+        <em>Dados da empresa, técnico, instalação e atualização</em>
       </span>
       <span class="pill">EDITAR</span>
     </button>
@@ -628,7 +639,7 @@ Views.siteForm = async ({ id } = {}) => {
         <h2>Dados da Piscina</h2>
         <label class="field"><span>Litragem conhecida (L) — opcional</span>
           <input type="number" step="1" min="0" inputmode="numeric" name="manualVolume" value="${esc(f.manualVolume || '')}" placeholder="Se o cliente já souber, digite aqui"></label>
-        <p class="hint" id="manualHint">Se preenchida, esta litragem <b>substitui o cálculo</b> pelas dimensões.</p>
+        <p class="hint">Se preenchida, esta litragem <b>substitui o cálculo</b> pelas dimensões.</p>
 
         <span class="field-lbl">Tipo de Piscina</span>
         <div class="segmented">
@@ -1114,6 +1125,7 @@ const pdfFileName = (r) => {
   return `NEGRETS-MASTER_${safe}_${String(r.dateISO).slice(0, 10)}.pdf`;
 };
 
+/* WEB SHARE API — envia o PDF direto ao WhatsApp do cliente */
 async function shareReport(r){
   try {
     const blob = await ensurePdf(r);
@@ -1233,7 +1245,21 @@ Views.reportView = async ({ id }) => {
   });
 };
 
-/* ---------- 12.7 AJUSTES + DIAGNÓSTICO PWA REFORÇADO ---------- */
+/* ---------- 12.7 AJUSTES + DIAGNÓSTICO PWA (v8, fiel) ---------- */
+
+/* Força atualização dos ARQUIVOS preservando os DADOS:
+   apaga Cache Storage, desregistra SWs e recarrega com
+   cache-buster. IndexedDB (clientes/relatórios) é intacto. */
+async function forceFileRefresh(){
+  try {
+    const keys = await caches.keys();
+    await Promise.all(keys.map((k) => caches.delete(k)));
+    const regs = await navigator.serviceWorker.getRegistrations();
+    await Promise.all(regs.map((r) => r.unregister()));
+  } catch (_) {}
+  location.href = location.pathname + '?v=' + Date.now() + '#/';
+}
+
 async function runPwaDiagnostics(){
   const rows = [];
   const push = (st, txt) => rows.push({ st, txt });
@@ -1243,7 +1269,7 @@ async function runPwaDiagnostics(){
     return rows;
   }
 
-  /* Tenta registrar AGORA — sem depender de recarregamento */
+  /* 1) SW registrado? Se não, registra AGORA e mostra o erro real */
   let reg = null;
   try { reg = await navigator.serviceWorker.getRegistration(); } catch (_) {}
   if (!reg){
@@ -1251,42 +1277,47 @@ async function runPwaDiagnostics(){
       reg = await navigator.serviceWorker.register('./sw.js');
       push('ok', 'Service Worker registrado com sucesso agora.');
     } catch (e){
-      push('fail', 'Falha ao registrar sw.js: ' + ((e && e.message) || e) +
-        ' — confirme que o arquivo sw.js existe NA RAIZ do repositório.');
+      push('fail', 'Registro do sw.js FALHOU: ' + ((e && e.message) || e));
+      push('fail', '→ Abra https://negrete79.github.io/sw.js no navegador. Se der 404, o arquivo não está na RAIZ (ou ficou "sw.js.txt").');
     }
-  }
-  if (reg){
+  } else {
     push(reg.active ? 'ok' : 'warn',
-      reg.active ? 'Service Worker ativo (base do offline).' : 'Service Worker instalando… verifique de novo em alguns segundos.');
+      reg.active ? 'Service Worker ativo (base do offline).'
+                 : 'Service Worker instalando… toque em Verificar novamente em alguns segundos.');
   }
-  push(navigator.serviceWorker.controller ? 'ok' : 'warn',
-    navigator.serviceWorker.controller ? 'Página sob controle do SW.' : 'Página ainda não controlada — feche o app e abra de novo.');
 
-  /* sw.js existe e é servido? */
+  push(navigator.serviceWorker.controller ? 'ok' : 'warn',
+    navigator.serviceWorker.controller
+      ? 'Página sob controle do SW — offline garantido.'
+      : 'Página ainda não controlada: use "Forçar atualização" ou feche/abra o app (só na 1ª vez).');
+
+  /* 2) sw.js é servido e parece válido? */
   try {
     const r3 = await fetch('sw.js', { cache: 'no-store' });
     if (!r3.ok){
-      push('fail', 'sw.js NÃO encontrado (HTTP ' + r3.status + ') — crie o arquivo na RAIZ.');
+      push('fail', 'sw.js não encontrado no servidor (HTTP ' + r3.status + ').');
     } else {
       const t = await r3.text();
-      push(/addEventListener/.test(t) ? 'ok' : 'warn',
-        'sw.js servido (' + t.length + ' bytes)' + (/addEventListener/.test(t) ? ' e parece válido.' : ', mas verifique o conteúdo.'));
+      push(t.includes('addEventListener') ? 'ok' : 'warn',
+        'sw.js servido (' + t.length + ' bytes)' + (t.includes('addEventListener') ? '.' : ' — conteúdo suspeito.'));
     }
   } catch (_){ push('fail', 'sw.js inacessível.'); }
 
-  /* manifest + ícones (data URI também é verificado) */
+  /* 3) manifest + ícones (data URI não pode dar 404) */
   try {
     const res = await fetch('manifest.json', { cache: 'no-store' });
     if (!res.ok){
       push('fail', 'manifest.json não encontrado (HTTP ' + res.status + ').');
     } else {
       const man = await res.json();
-      push('ok', 'manifest.json OK — “' + (man.name || man.short_name || '?') + '”.');
+      push('ok', 'Manifest OK — “' + (man.name || man.short_name || '?') + '”.');
       const icons = Array.isArray(man.icons) ? man.icons : [];
-      if (!icons.length) push('fail', 'O manifest não declara ícones.');
+      if (!icons.length){
+        push('fail', 'O manifest não declara ícones.');
+      }
       for (const ic of icons){
         if (String(ic.src).startsWith('data:')){
-          push('ok', 'Ícone embutido (data URI) presente — sem risco de 404.');
+          push('ok', 'Ícone embutido no manifest (impossível dar 404).');
           continue;
         }
         try {
@@ -1296,12 +1327,13 @@ async function runPwaDiagnostics(){
         } catch (_){ push('fail', 'Ícone inacessível: ' + ic.src); }
       }
     }
-  } catch (e){ push('fail', 'Falha ao carregar o manifest: ' + e.message); }
+  } catch (e){ push('fail', 'Falha ao ler o manifest: ' + e.message); }
 
+  /* 4) Veredito: a decisão é do Chrome, não nossa */
   push(deferredPrompt ? 'ok' : 'warn',
     deferredPrompt
-      ? 'Instalação liberada — use o botão acima.'
-      : 'Chrome libera a instalação quando TODOS os itens vermelhos forem corrigidos. Aguarde alguns segundos e verifique novamente.');
+      ? 'INSTALAÇÃO LIBERADA — toque no botão “Instalar na tela inicial”.'
+      : 'Chrome ainda não liberou o prompt. Corrija os itens vermelhos, feche o app e abra de novo.');
   return rows;
 }
 
@@ -1324,10 +1356,12 @@ Views.settings = async () => {
 
     <section class="card form">
       <h2 style="font-size:.74rem;letter-spacing:.12em;color:var(--pool);text-transform:uppercase;font-weight:800">Instalação do Aplicativo</h2>
-      <button class="btn ghost block" id="installBtn" hidden>${icon('download')} Instalar na tela inicial</button>
+      <p class="hint">Versão do app: <b>${APP_VERSION}</b> — se este número não mudar após publicar uma versão nova, use “Forçar atualização” abaixo.</p>
+      <button class="btn primary block" id="installBtn" hidden>${icon('download')} Instalar na tela inicial</button>
       <p class="hint" id="iosHint" hidden>No iPhone: toque em <b>Compartilhar</b> e depois em <b>Adicionar à Tela de Início</b>.</p>
       <div id="diagList"><p class="hint">Verificando instalação…</p></div>
       <button class="btn ghost block" id="diagAgain">${icon('shield')} Verificar novamente</button>
+      <button class="btn ghost block" id="refreshBtn">${icon('refresh')} Forçar atualização dos arquivos (mantém seus dados)</button>
     </section>
 
     <section class="card form">
@@ -1343,17 +1377,31 @@ Views.settings = async () => {
     toast('Ajustes salvos.');
   };
 
+  /* Instalar — com feedback real (antes falhava em silêncio) */
   const ib = $('#installBtn');
-  if (deferredPrompt){
-    ib.hidden = false;
-    ib.onclick = async () => {
+  if (deferredPrompt) ib.hidden = false;
+
+  ib.onclick = async () => {
+    if (!deferredPrompt){
+      toast('Chrome ainda não liberou. Veja o diagnóstico abaixo.', 'warn');
+      return;
+    }
+    try {
       deferredPrompt.prompt();
       const c = await deferredPrompt.userChoice;
-      if (c.outcome === 'accepted') toast('Aplicativo instalado!');
+      if (c.outcome === 'accepted'){
+        toast('Instalando — confirme na tela do Android.', 'ok', 4000);
+      } else {
+        toast('Instalação cancelada.', 'info');
+      }
       deferredPrompt = null;
       ib.hidden = true;
-    };
-  } else if (/iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream){
+    } catch (e){
+      toast('O Chrome recusou o prompt: ' + ((e && e.message) || e), 'warn', 4500);
+    }
+  };
+
+  if (!deferredPrompt && /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream){
     $('#iosHint').hidden = false;
   }
 
@@ -1363,14 +1411,23 @@ Views.settings = async () => {
     const rows = await runPwaDiagnostics();
     diagList.innerHTML = rows.map((r) => `
       <div class="sum-row">
-        <span style="display:flex;align-items:center;gap:8px;color:${r.st === 'fail' ? '#C0362C' : r.st === 'warn' ? '#8A4B08' : 'inherit'}">
-          <i class="sync-dot ${r.st === 'ok' ? 'ok' : 'pend'}" style="${r.st === 'fail' ? 'background:#C0362C' : ''}"></i>${esc(r.txt)}
+        <span style="display:flex;align-items:flex-start;gap:8px;color:${r.st === 'fail' ? '#C0362C' : r.st === 'warn' ? '#8A4B08' : 'inherit'}">
+          <i class="sync-dot ${r.st === 'ok' ? 'ok' : 'pend'}" style="${r.st === 'fail' ? 'background:#C0362C' : ''};margin-top:4px"></i>${esc(r.txt)}
         </span>
       </div>`).join('');
     if (deferredPrompt) ib.hidden = false;
   }
   renderDiag();
-  $('#diagAgain').onclick = renderDiag;
+  $('#diagAgain').onclick  = renderDiag;
+  $('#refreshBtn').onclick = async () => {
+    if (await confirmDlg({
+      title: 'Atualizar arquivos do app?',
+      text: 'Limpa o cache de arquivos e recarrega o app. Seus clientes, relatórios e ajustes NÃO são apagados.',
+      okLabel: 'Atualizar'
+    })){
+      await forceFileRefresh();
+    }
+  };
 
   $('#wipeBtn').onclick = async () => {
     if (!await confirmDlg({ title: 'Apagar todos os dados?', text: 'Sítios, relatórios e ajustes deste aparelho serão removidos definitivamente.', okLabel: 'Apagar tudo', danger: true })) return;
@@ -1418,7 +1475,7 @@ async function normalizeReports(){
   for (const s of sites){
     let ch = false;
     if (typeof s.manualVolume === 'undefined'){ s.manualVolume = ''; ch = true; }
-    if (typeof s.volumeSource === 'undefined'){ s.volumeSource = s.volume ? 'calc' : 'calc'; ch = true; }
+    if (typeof s.volumeSource === 'undefined'){ s.volumeSource = 'calc'; ch = true; }
     if (ch) await DB.put('sites', s);
   }
 }
@@ -1427,6 +1484,7 @@ async function normalizeReports(){
    14. BOOT
    ========================================================= */
 async function init(){
+  console.log('[NEGRET\'S] App v' + APP_VERSION);
   App.el = $('#app');
   $$('[data-ic]').forEach((el) => { el.outerHTML = icon(el.dataset.ic); });
 
@@ -1437,7 +1495,7 @@ async function init(){
   if ('serviceWorker' in navigator){
     window.addEventListener('load', () => {
       navigator.serviceWorker.register('./sw.js')
-        .then((reg) => console.log('[NEGRET\'S] SW registrado:', reg.scope))
+        .then(() => console.log('[NEGRET\'S] SW registrado.'))
         .catch((err) => console.error('[NEGRET\'S] SW falhou:', err));
     });
   }
