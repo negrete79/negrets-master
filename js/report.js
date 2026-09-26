@@ -1,16 +1,17 @@
 /* =========================================================
-   report.js — PDF timbrado (v2: Dureza Cálcica + máx. 3
-   fotos por lado/seção para não estourar a memória)
+   report.js — PDF timbrado v14
+   Seções A (Piscina+Dureza), B (Sítio), C (Roçada),
+   D (Casa Sede), Registro de Hóspedes, customTasks.
    ========================================================= */
 const ReportPDF = (() => {
   'use strict';
   const { Doc, rgb, wrap, textWidth } = MiniPDF;
 
-  const NAVY=rgb('#0B2A4A'), POOL=rgb('#1B87D6'), INK=rgb('#12263A'), MUT=rgb('#5B7083'),
+  const NAVY=rgb('#0C2D4D'), POOL=rgb('#1E88E5'), INK=rgb('#12263A'), MUT=rgb('#5B7083'),
         LINE=rgb('#DCE6EF'), BG=rgb('#F2F7FB'), OK=rgb('#188A52'), OKBG=rgb('#E7F5EC'),
         WARN=rgb('#B45309'), WARNBG=rgb('#FDF3E3'), WHITE=rgb('#FFFFFF'),
         SKY=rgb('#BFD9EE'), GRAYBG=rgb('#EEF3F8'), STEEL=rgb('#9FB3C8'),
-        DEPC=rgb('#E3F2FC'), DEPT=rgb('#0E5E9C');
+        DEPC=rgb('#E3F2FC'), DEPT=rgb('#0E5E9C'), INDBG=rgb('#E8EAF6'), INDT=rgb('#3949AB');
 
   const M = 46, W = 595.28, H = 841.89, CW = W - 2 * M;
   const fmt0 = new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 0 });
@@ -22,7 +23,8 @@ const ReportPDF = (() => {
   const TASKS = {
     pool:   [['aspiracao','Aspiração'],['peneira','Peneira'],['escovacao','Escovação de Bordas'],['filtro','Limpeza do Filtro']],
     site:   [['churrasqueira','Área da Churrasqueira Limpa'],['varandas','Varandas Varridas'],['banheiros','Banheiros Externos Higienizados'],['lixo','Recolhimento de Lixo']],
-    garden: [['entrada','Entrada Principal'],['piscina','Entorno da Piscina'],['pomar','Pomar / Pombal'],['campo','Campo de Futebol']]
+    garden: [['entrada','Entrada Principal'],['piscina','Entorno da Piscina'],['pomar','Pomar / Pombal'],['campo','Campo de Futebol']],
+    house:  [['cozinha','Cozinha'],['sala','Salas e Estar'],['quartos','Quartos'],['banheiros','Banheiros'],['varanda','Varanda / Gourmet'],['area_servico','Área de Serviço'],['lixo','Lixeiras e Lixo'],['vidros','Janelas e Vidros']]
   };
 
   function ellip(str, size, bold, maxW){
@@ -31,6 +33,13 @@ const ReportPDF = (() => {
     let s = str;
     while (s.length > 1 && textWidth(s + '…', size, bold) > maxW) s = s.slice(0, -1);
     return s + '…';
+  }
+
+  /* Tarefas fixas + personalizadas → [label, done][] */
+  function combinedList(secName, srcSec, customAll){
+    const custom = (customAll && Array.isArray(customAll[secName])) ? customAll[secName] : [];
+    return TASKS[secName].map(([k, l]) => [l, !!(srcSec && srcSec.tasks && srcSec.tasks[k])])
+      .concat(custom.map((c) => [String(c.label), !!(srcSec && srcSec.tasks && srcSec.tasks[c.id])]));
   }
 
   async function build(report, site, settings){
@@ -63,6 +72,7 @@ const ReportPDF = (() => {
       }
     }
     function checklist(items){
+      if (!items.length) return;
       ensure(26 + Math.ceil(items.length / 2) * 20);
       d.text('CHECKLIST EXECUTADO', M, y + 8, { size: 8, bold: true, color: NAVY });
       y += 16;
@@ -70,7 +80,7 @@ const ReportPDF = (() => {
       items.forEach((it, i) => {
         const cx = M + (i % 2) * colW, cy = y + Math.floor(i / 2) * 20;
         checkbox(cx, cy, it[1]);
-        d.text(it[0], cx + 17, cy + 9, { size: 9.5, color: INK });
+        d.text(ellip(it[0], 9.5, false, colW - 22), cx + 17, cy + 9, { size: 9.5, color: INK });
       });
       y += Math.ceil(items.length / 2) * 20 + 10;
     }
@@ -113,7 +123,6 @@ const ReportPDF = (() => {
       d.roundRect(x + bw / 2 - cw2 / 2, yy + bh + 4, cw2, 13, 6.5, { fill: capBG });
       d.text(cap, x + bw / 2, yy + bh + 13, { size: 7, bold: true, color: capFG, align: 'center', width: cw2 });
     }
-    /* NOVO: limite de fotos no PDF (as demais ficam salvas no app) */
     function photosBlock(title, ph){
       const allB = (ph && ph.before) || [], allA = (ph && ph.after) || [];
       if (!allB.length && !allA.length) return;
@@ -146,8 +155,36 @@ const ReportPDF = (() => {
       d.text(label, x, yy + 1, { size: 8, bold: true, color: NAVY, align: 'center', width: w });
       return x + w;
     }
+    function guestBlock(gst){
+      ensure(118);
+      d.text('REGISTRO DE HÓSPEDES', M, y + 8, { size: 8, bold: true, color: NAVY });
+      y += 16;
+      const gh = 88;
+      d.roundRect(M, y, CW, gh, 10, { fill: BG });
+      const col2 = M + CW / 2 + 12, colW = CW / 2 - 28;
+      d.text('CONTRATANTE', M + 14, y + 16, { size: 6.5, bold: true, color: MUT });
+      d.text(ellip(gst.name, 10, true, colW), M + 14, y + 30, { size: 10, bold: true, color: INK });
+      d.text('PESSOAS', M + 14, y + 46, { size: 6.5, bold: true, color: MUT });
+      d.text(gst.people ? String(gst.people) : '—', M + 14, y + 58, { size: 9.5, color: INK });
+      d.text('WHATSAPP', col2, y + 16, { size: 6.5, bold: true, color: MUT });
+      d.text(ellip(gst.whatsapp || '—', 9.5, false, colW), col2, y + 30, { size: 9.5, color: INK });
+      const per = [gst.checkin, gst.checkout].filter(Boolean)
+        .map((v) => new Date(v + 'T12:00:00').toLocaleDateString('pt-BR')).join(' → ');
+      d.text('PERÍODO (CHECK-IN → CHECK-OUT)', col2, y + 46, { size: 6.5, bold: true, color: MUT });
+      d.text(per || '—', col2, y + 58, { size: 9.5, color: INK });
 
-    /* ============ Página 1 ============ */
+      const tag = (label, on, x, wd) => {
+        d.roundRect(x, y + gh - 24, wd, 16, 8, on ? { fill: INDBG } : { fill: GRAYBG });
+        d.text((on ? 'SIM  •  ' : 'NÃO  •  ') + label, x, y + gh - 13,
+          { size: 7, bold: true, color: on ? INDT : MUT, align: 'center', width: wd });
+      };
+      const half = (CW - 20) / 2;
+      tag('Entrou na piscina', !!gst.entered, M + 12, half);
+      tag('Saiu — precisa choque', !!gst.left, M + 12 + half + 8, half);
+      y += gh + 14;
+    }
+
+    /* ===== Página 1 ===== */
     d.rect(0, 0, W, 112, NAVY);
     d.rect(0, 112, W, 3, POOL);
     d.text(s.companyName || "NEGRET'S MASTER", M, 46, { size: 19, bold: true, color: WHITE });
@@ -163,6 +200,7 @@ const ReportPDF = (() => {
     y += 22;
     let cx = M;
     const chips = [];
+    chips.push(report.mode === 'hospedes' ? 'Atendimento: Hóspedes' : 'Atendimento: Manutenção');
     if (site.poolType)  chips.push('Piscina: ' + (PT[site.poolType] || site.poolType));
     if (site.poolShape) chips.push('Formato: ' + (PS[site.poolShape] || site.poolShape));
     if (site.volume)    chips.push('Litragem: ' + fmtL(site.volume));
@@ -181,7 +219,9 @@ const ReportPDF = (() => {
     d.text(ellip(site.address || '—', 9.5, false, colW), col2, y + 69, { size: 9.5, color: INK });
     y += 104;
 
-    /* ============ Seção A — com DUREZA CÁLCICA ============ */
+    if (report.guest && report.guest.name) guestBlock(report.guest);
+
+    /* ===== Seção A ===== */
     if (report.pool && report.pool.active){
       sectionBar('A', 'PARÂMETROS DA PISCINA');
       if (site.volume){ d.text('Volume de referência: ' + fmtL(site.volume), M, y + 6, { size: 8.5, color: MUT }); y += 18; }
@@ -233,23 +273,33 @@ const ReportPDF = (() => {
         y += 44;
       }
 
-      checklist(TASKS.pool.map(([k, l]) => [l, !!(report.pool.tasks && report.pool.tasks[k])]));
+      checklist(combinedList('pool', report.pool, report.customTasks));
       photosBlock('REGISTRO FOTOGRÁFICO — PISCINA', report.pool.photos);
       y += 6;
     }
 
+    /* ===== Seção B ===== */
     if (report.site && report.site.active){
       sectionBar('B', 'LIMPEZA DO SÍTIO');
-      checklist(TASKS.site.map(([k, l]) => [l, !!(report.site.tasks && report.site.tasks[k])]));
+      checklist(combinedList('site', report.site, report.customTasks));
       photosBlock('REGISTRO FOTOGRÁFICO — SÍTIO', report.site.photos);
       y += 6;
     }
 
+    /* ===== Seção C ===== */
     if (report.garden && report.garden.active){
       sectionBar('C', 'ROÇADA E JARDINAGEM');
-      checklist(TASKS.garden.map(([k, l]) => [l, !!(report.garden.tasks && report.garden.tasks[k])]));
+      checklist(combinedList('garden', report.garden, report.customTasks));
       notesBox('OBSERVAÇÕES DA ROÇADA', report.garden.notes);
       photosBlock('REGISTRO FOTOGRÁFICO — ROÇADA', report.garden.photos);
+      y += 6;
+    }
+
+    /* ===== Seção D ===== */
+    if (report.house && report.house.active){
+      sectionBar('D', 'CASA SEDE — LIMPEZA DA CASA');
+      checklist(combinedList('house', report.house, report.customTasks));
+      photosBlock('REGISTRO FOTOGRÁFICO — CASA SEDE', report.house.photos);
       y += 6;
     }
 
@@ -276,5 +326,5 @@ const ReportPDF = (() => {
     return d.build();
   }
 
-  return { build, TASKS };
+  return { build, TASKS, combinedList };
 })();
