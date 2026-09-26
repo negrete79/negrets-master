@@ -1,25 +1,29 @@
 /* =========================================================
-   NEGRET'S MASTER — js/app.js (v15 — arquivo completo)
+   NEGRET'S MASTER — js/app.js (v16 — arquivo completo)
    -----------------------------------------------------------
-   NOVO v15:
-   • Seleção de tipo em MODAL separado: Manutenção × Hóspedes
-     (rota #/vistoria → escolha; #/vistoria/hospedes etc.)
-   • Tarefas personalizadas EDITÁVEIS: botão ✎ no card
-     (renomear ou excluir via modal próprio)
-   • Guia "Como medir?" com CORES do teste (pH fenol vermelho,
-     cloro OTO, fita teste) na seção da piscina
-   • Cartão ao vivo "Como está a água?": interpreta cada
-     parâmetro pela cor/valor e instrui a ação com dosagem
-   Mantido de v14: módulo D Casa Sede, hóspede com saída
-   obrigando piscina+Casa Sede, litragem manual, dureza
-   cálcica, PDF timbrado, diagnóstico PWA, migração de dados.
+   NOVO v16:
+   • TAREFAS 100% GERENCIADAS PELO USUÁRIO: o que aparece em
+     A/B/C/D é a lista dele. Botões: + Adicionar (prompt),
+     ✎ Editar/renomear (modal), 🗑 Excluir (com confirmação
+     + botão DESFAZER por 6s — proteção contra exclusão
+     acidental). A lista editada vira o CATÁLOGO global e é
+     usada em todas as futuras vistorias.
+   • MEDIÇÃO PELA COR: em cada parâmetro da piscina há chips
+     de cor (amarelo/laranja/roxo do pH, tons do cloro,
+     faixas de alcalinidade e dureza). Tocar na cor que
+     apareceu no teste preenche o valor e o cartão "Como
+     está a água?" instrui a manutenção com dosagem.
+   Mantido: modal separado Manutenção×Hóspedes (v15), guia
+   de cores (v15), módulo D, saída de hóspede exigindo
+   piscina+Casa Sede, litragem manual, dureza cálcica,
+   PDF timbrado, diagnóstico PWA, migração de dados.
    ========================================================= */
 'use strict';
 
 /* =========================================================
    1. CONFIG
    ========================================================= */
-const APP_VERSION = '15.0.0';
+const APP_VERSION = '16.0.0';
 
 const CONFIG = {
   SYNC_ENDPOINT: '' /* nuvem futura; vazio = 100% local */
@@ -79,6 +83,8 @@ function b64ToBlob(b64){
 const g = (obj, k, dflt) =>
   (obj && typeof obj === 'object' && obj[k] !== undefined && obj[k] !== null) ? obj[k] : dflt;
 
+const deepCopy = (o) => JSON.parse(JSON.stringify(o));
+
 /* =========================================================
    3. ÍCONES
    ========================================================= */
@@ -128,14 +134,24 @@ const checkSVG = `<svg viewBox="0 0 80 80" fill="none" stroke-linecap="round" st
 /* =========================================================
    4. TOAST / MODAIS
    ========================================================= */
-function toast(msg, kind = 'ok', ms = 2800){
+function toast(msg, kind = 'ok', ms = 2800, action = null){
   const icMap = { ok: 'check', warn: 'alert', info: 'sync' };
   const t = document.createElement('div');
   t.className = 'toast ' + kind;
-  t.innerHTML = icon(icMap[kind] || 'check') + '<span>' + esc(msg) + '</span>';
+  t.innerHTML = icon(icMap[kind] || 'check') +
+    '<span style="flex:1">' + esc(msg) + '</span>' +
+    (action ? `<button class="tact" type="button">${esc(action.label)}</button>` : '');
+  let tm = null;
+  if (action){
+    t.querySelector('.tact').onclick = () => {
+      if (tm) clearTimeout(tm);
+      t.remove();
+      action.fn();
+    };
+  }
   $('#toasts').appendChild(t);
   requestAnimationFrame(() => t.classList.add('show'));
-  setTimeout(() => { t.classList.remove('show'); setTimeout(() => t.remove(), 320); }, ms);
+  tm = setTimeout(() => { t.classList.remove('show'); setTimeout(() => t.remove(), 320); }, ms);
 }
 
 function confirmDlg({ title, text, okLabel = 'Confirmar', danger = false }){
@@ -156,17 +172,18 @@ function confirmDlg({ title, text, okLabel = 'Confirmar', danger = false }){
   });
 }
 
-/* v15: editor de tarefa — renomear ou excluir (modal próprio) */
-function openTaskEditor(sec, id, currentLabel, { onSave, onDelete }){
+/* v16: editor de tarefa — renomear ou excluir (com proteção) */
+function openTaskEditor(currentLabel, isDone, { onSave, onDelete }){
   const back = document.createElement('div');
   back.className = 'modal-back';
   back.innerHTML = `
     <div class="modal">
       <h3>Editar tarefa</h3>
-      <label class="field" style="margin-bottom:16px"><span>Nome da tarefa</span>
+      ${isDone ? '<p style="margin-bottom:8px">Esta tarefa está <b>marcada como feita</b> nesta vistoria.</p>' : ''}
+      <label class="field" style="margin-bottom:16px"><span>O que fazer (nome da tarefa)</span>
         <input id="teName" value="${esc(currentLabel)}"></label>
-      <div class="modal-actions" style="grid-template-columns:1fr 1fr 1fr">
-        <button class="btn danger" data-a="del">${icon('trash')}</button>
+      <div class="modal-actions" style="grid-template-columns:auto 1fr 1fr">
+        <button class="btn danger" data-a="del" aria-label="Excluir tarefa">${icon('trash')}</button>
         <button class="btn ghost" data-a="c">Cancelar</button>
         <button class="btn primary" data-a="s">Salvar</button>
       </div>
@@ -179,15 +196,21 @@ function openTaskEditor(sec, id, currentLabel, { onSave, onDelete }){
     if (a === 'c'){ back.remove(); return; }
     if (a === 'del'){
       back.remove();
-      if (await confirmDlg({ title: 'Excluir tarefa?', text: `"${currentLabel}" será removida desta seção.`, okLabel: 'Excluir', danger: true })){
-        onDelete(id);
+      /* PROTEÇÃO: confirmação explícita antes de excluir.
+         Depois da exclusão ainda há o Desfazer (6s). */
+      if (await confirmDlg({
+        title: 'Excluir tarefa?',
+        text: `"${currentLabel}" será removida desta vistoria e das próximas. Você poderá Desfazer por alguns segundos.`,
+        okLabel: 'Excluir', danger: true
+      })){
+        onDelete();
       }
       return;
     }
     const v = $('#teName', back).value.trim();
     if (!v){ toast('O nome não pode ficar vazio.', 'warn'); return; }
     back.remove();
-    onSave(id, v);
+    onSave(v);
   });
 }
 
@@ -208,7 +231,7 @@ function openMeasureGuide(){
         <small><span class="color-chip" style="background:#F7E97F"></span>Amarelo claro = cloro <b>BAIXO</b><br>
         <span class="color-chip" style="background:#F2C230"></span>Amarelo = <b>IDEAL</b> (1,0–3,0 ppm)<br>
         <span class="color-chip" style="background:#B5821C"></span>Amarelo escuro/Marrom = <b>ALTO</b></small></p></div>
-      <div class="guide-step">${icon('droplet')}<p><b>4. Alcalinidade e Dureza</b><small>Use a fita-teste ou o frasco do kit e compare com a <b>escala impressa</b> no próprio frasco. Anote o número mais próximo da cor obtida.</small></p></div>
+      <div class="guide-step">${icon('droplet')}<p><b>4. Alcalinidade e Dureza</b><small>Use a fita-teste ou o frasco do kit e compare com a <b>escala impressa</b> no próprio frasco. Toque na faixa correspondente (Baixa/Ideal/Alta).</small></p></div>
       <div class="guide-step">${icon('check')}<p><b>Dicas finais</b><small>Compare as cores à luz do dia (nunca sob sol direto). Espere ~10 segundos após as gotas. Meça sempre no mesmo horário.</small></p></div>
     </div>
     <button class="btn primary block" data-a="c">Entendi, vamos medir</button>
@@ -220,7 +243,7 @@ function openMeasureGuide(){
 }
 
 /* =========================================================
-   5. AJUSTES DA EMPRESA
+   5. AJUSTES + CATÁLOGO DE TAREFAS (v16)
    ========================================================= */
 const DEFAULT_SETTINGS = {
   companyName: "NEGRET'S MASTER",
@@ -233,6 +256,29 @@ async function getSettings(){
   return { ...DEFAULT_SETTINGS, ...(g(rec, 'value', {})) };
 }
 const saveSettings = (v) => DB.put('settings', { key: 'company', value: v });
+
+/* Catálogo global de tarefas por seção. O usuário edita
+   dentro da vistoria e a lista é salva aqui — vira padrão
+   de todas as vistorias seguintes. */
+const TASK_SECTIONS = ['pool', 'site', 'garden', 'house'];
+
+async function getTaskCatalog(){
+  const rec = await DB.get('settings', 'tasks');
+  const cat = g(rec, 'value', null);
+  const out = {};
+  let needsSave = false;
+  TASK_SECTIONS.forEach((sec) => {
+    const arr = (cat && Array.isArray(cat[sec]) && cat[sec].length)
+      ? cat[sec].filter((c) => c && c.id && c.label)
+                 .map((c) => ({ id: String(c.id), label: String(c.label) }))
+      : null;
+    out[sec] = arr || ReportPDF.TASKS[sec].map(([k, l]) => ({ id: k, label: l }));
+    if (!arr) needsSave = true;
+  });
+  if (needsSave) await saveTaskCatalog(out);
+  return out;
+}
+const saveTaskCatalog = (c) => DB.put('settings', { key: 'tasks', value: deepCopy(c) });
 
 let deferredPrompt = null;
 
@@ -357,7 +403,7 @@ async function compressImage(file){
 }
 
 /* =========================================================
-   9. CÁLCULOS
+   9. CÁLCULOS + CORES DO TESTE (v16)
    ========================================================= */
 function calcVolume(shape, { length = 0, width = 0, diameter = 0, depth = 0 } = {}){
   const C = parseFloat(length)   || 0;
@@ -392,7 +438,34 @@ function computeRecs(vol, cloro, ph, dureza){
   return recs;
 }
 
-/* v15: veredito por parâmetro, com cor do teste e instrução */
+/* Cores do teste → valor aproximado do parâmetro.
+   Tocar no chip preenche o campo e dispara a análise. */
+const COLOR_MAP = {
+  ph: [
+    { c: '#F2C230', l: 'Amarelo', v: 6.6 },
+    { c: '#E8792B', l: 'Laranja', v: 7.4 },
+    { c: '#8E5BD6', l: 'Roxo',    v: 8.2 }
+  ],
+  cloro: [
+    { c: '#F7E97F', l: 'Claro',   v: 0.5 },
+    { c: '#F2C230', l: 'Amarelo', v: 2.0 },
+    { c: '#B5821C', l: 'Escuro',  v: 5.0 }
+  ],
+  alcal: [
+    { c: '#F5A524', l: 'Baixa', v: 60 },
+    { c: '#188A52', l: 'Ideal', v: 100 },
+    { c: '#D97706', l: 'Alta',  v: 140 }
+  ],
+  dureza: [
+    { c: '#6FA8DC', l: 'Baixa', v: 150 },
+    { c: '#188A52', l: 'Ideal', v: 300 },
+    { c: '#C0362C', l: 'Alta',  v: 450 }
+  ]
+};
+
+const PARAM_NAMES = { ph: 'pH', cloro: 'Cloro', alcal: 'Alcalinidade', dureza: 'Dureza Cálcica' };
+
+/* v15/v16: veredito por parâmetro, com cor e instrução de manutenção */
 function paramVerdict(k, v, vol){
   const n = parseFloat(v);
   if (v === '' || v == null || isNaN(n)) return null;
@@ -529,21 +602,21 @@ function openClientModal(onSaved){
 }
 
 /* =========================================================
-   11. ROUTER — #/vistoria agora é a SELEÇÃO de tipo (v15)
+   11. ROUTER — #/vistoria = seleção de tipo (modal separado)
    ========================================================= */
 const App = {
   el: null,
   routes: [
-    { re: /^#\/?$/,                          view: 'dashboard',  m: () => ({}) },
-    { re: /^#\/sites$/,                      view: 'sites',      m: () => ({}) },
-    { re: /^#\/site\/novo$/,                 view: 'siteForm',   m: () => ({}) },
-    { re: /^#\/site\/([\w-]+)$/,             view: 'siteForm',   m: (m) => ({ id: m[1] }) },
-    { re: /^#\/vistoria$/,                   view: 'modeSelect', m: () => ({}) },
-    { re: /^#\/vistoria\/(manutencao|hospedes)$/, view: 'inspection', m: (m) => ({ mode: m[1] }) },
-    { re: /^#\/editar\/([\w-]+)$/,           view: 'inspection', m: (m) => ({ reportId: m[1] }) },
-    { re: /^#\/historico$/,                  view: 'history',    m: () => ({}) },
-    { re: /^#\/relatorio\/([\w-]+)$/,        view: 'reportView', m: (m) => ({ id: m[1] }) },
-    { re: /^#\/ajustes$/,                    view: 'settings',   m: () => ({}) }
+    { re: /^#\/?$/,                              view: 'dashboard',  m: () => ({}) },
+    { re: /^#\/sites$/,                          view: 'sites',      m: () => ({}) },
+    { re: /^#\/site\/novo$/,                     view: 'siteForm',   m: () => ({}) },
+    { re: /^#\/site\/([\w-]+)$/,                 view: 'siteForm',   m: (m) => ({ id: m[1] }) },
+    { re: /^#\/vistoria$/,                       view: 'modeSelect', m: () => ({}) },
+    { re: /^#\/vistoria\/(manutencao|hospedes)$/,view: 'inspection', m: (m) => ({ mode: m[1] }) },
+    { re: /^#\/editar\/([\w-]+)$/,               view: 'inspection', m: (m) => ({ reportId: m[1] }) },
+    { re: /^#\/historico$/,                      view: 'history',    m: () => ({}) },
+    { re: /^#\/relatorio\/([\w-]+)$/,            view: 'reportView', m: (m) => ({ id: m[1] }) },
+    { re: /^#\/ajustes$/,                        view: 'settings',   m: () => ({}) }
   ],
   async render(){
     if (!this.el) return;
@@ -661,7 +734,7 @@ Views.dashboard = async () => {
   $('#syncNow').onclick     = () => Sync.syncNow();
 };
 
-/* ---------- 12.1b SELEÇÃO DE TIPO (v15 — modal separado) ---------- */
+/* ---------- 12.1b SELEÇÃO DE TIPO (modal separado) ---------- */
 Views.modeSelect = async () => {
   App.el.innerHTML = topbar('Nova Vistoria', '#/') + `
   <main class="view container">
@@ -861,14 +934,13 @@ Views.siteForm = async ({ id } = {}) => {
   };
 };
 
-/* ---------- 12.4 VISTORIA (v15 — modo fixo pela seleção) ---------- */
+/* ---------- 12.4 VISTORIA (v16) ---------- */
 Views.inspection = async ({ mode, reportId } = {}) => {
   const TASKS = ReportPDF.TASKS;
   const SECS = ['pool', 'site', 'garden', 'house'];
-  const [sites, settings] = await Promise.all([DB.all('sites'), getSettings()]);
+  const [sites, settings, catalog] = await Promise.all([DB.all('sites'), getSettings(), getTaskCatalog()]);
   const editSource = reportId ? await DB.get('reports', reportId) : null;
 
-  /* v15: modo vem da seleção (nova) ou do relatório (edição) */
   const effMode = editSource ? g(editSource, 'mode', 'manutencao')
                              : (mode === 'hospedes' ? 'hospedes' : 'manutencao');
 
@@ -895,11 +967,16 @@ Views.inspection = async ({ mode, reportId } = {}) => {
       after:  Array.isArray(ph.after)  ? ph.after.slice()  : []
     };
   };
+  /* v16: lista completa (fixas mescladas + personalizadas).
+     Relatórios antigos (sem customTasks) são cobertos pelo
+     fallback das tarefas fixas. */
   const customSet = (src) => {
     const ct = g(src, 'customTasks', {});
     const out = {};
     SECS.forEach((sec) => {
-      const arr = Array.isArray(ct[sec]) ? ct[sec] : [];
+      const arr = (Array.isArray(ct[sec]) && ct[sec].length)
+        ? ct[sec]
+        : TASKS[sec].map(([k, l]) => ({ id: k, label: l }));
       out[sec] = arr.filter((c) => c && c.id && c.label)
                     .map((c) => ({ id: String(c.id), label: String(c.label) }));
     });
@@ -925,10 +1002,11 @@ Views.inspection = async ({ mode, reportId } = {}) => {
         left: !!g(gh, 'left', false)
       };
     })(editSource && editSource.guest),
-    siteId: g(editSource, 'siteId',
-      (sites[0] ? sites[0].id : '')),
+    siteId: g(editSource, 'siteId', (sites[0] ? sites[0].id : '')),
     dateISO: (editSource ? String(editSource.dateISO).slice(0, 10) : hojeISO()),
-    customTasks: customSet(editSource),
+    /* v16: nova vistoria semeia do CATÁLOGO do usuário;
+       edição mantém a lista histórica do relatório. */
+    customTasks: editSource ? customSet(editSource) : deepCopy(catalog),
     pool: secDraft(editSource && editSource.pool, TASKS.pool, {
       active: editSource ? !!g(editSource.pool, 'active', false) : true,
       ph:     String(g(editSource && editSource.pool, 'ph', '')),
@@ -962,64 +1040,84 @@ Views.inspection = async ({ mode, reportId } = {}) => {
     s.volume ? `<span>${icon('droplet')}${fmt0.format(s.volume)} L${s.volumeSource === 'manual' ? ' •' : ''}</span>` : ''
   ].filter(Boolean).join('');
 
-  /* ---- Cards de tarefa (fixas + personalizadas editáveis) ---- */
-  const isCustom = (sec, id) => draft.customTasks[sec].some((c) => c.id === id);
-
+  /* ---- Tarefas do usuário: cards + adicionar/editar/excluir ---- */
   const taskCards = (sec) => {
-    const all = TASKS[sec].map(([k, lbl]) => ({ id: k, label: lbl }))
-      .concat(draft.customTasks[sec]);
+    const all = draft.customTasks[sec];
     return `
       <div class="task-grid">
         ${all.map((t) => `
           <div class="task-card ${draft[sec].tasks[t.id] ? 'on' : ''}" data-task="${sec}" data-key="${esc(t.id)}" role="button" tabindex="0">
             <span class="tc-check">${icon('check')}</span><span>${esc(t.label)}</span>
-            ${isCustom(sec, t.id) ? `<button type="button" class="tc-edit" data-edit="${sec}" data-id="${esc(t.id)}" aria-label="Editar tarefa">${icon('edit')}</button>` : ''}
+            <button type="button" class="tc-edit" data-edit="${sec}" data-id="${esc(t.id)}" aria-label="Editar ou excluir">${icon('edit')}</button>
           </div>`).join('')}
       </div>
       <button type="button" class="add-task" data-addtask="${sec}">${icon('plus')} Adicionar nova tarefa</button>`;
   };
   const tasksBlock = (sec) => `<div data-tasks="${sec}">${taskCards(sec)}</div>`;
 
+  /* Salva a lista atual como catálogo global (padrão das próximas vistorias) */
+  function persistCatalog(){
+    saveTaskCatalog(draft.customTasks).catch(() => {});
+  }
+
   function bindTaskCards(){
-    /* card inteiro alterna marcado */
     $$('.task-card').forEach((card) => {
       card.onclick = (e) => {
-        if (e.target.closest('.tc-edit')) return; /* clique no ✎ não alterna */
+        if (e.target.closest('.tc-edit')) return;
         const sec = card.dataset.task, key = card.dataset.key;
         draft[sec].tasks[key] = !draft[sec].tasks[key];
         card.classList.toggle('on', draft[sec].tasks[key]);
       };
     });
-    /* ✎ abre o editor (renomear/excluir) */
+
+    /* ✎ — editar/renomear ou excluir (com proteção + Desfazer) */
     $$('.tc-edit').forEach((b) => b.onclick = (e) => {
       e.stopPropagation();
       const sec = b.dataset.edit, id = b.dataset.id;
-      const item = draft.customTasks[sec].find((c) => c.id === id);
-      if (!item) return;
-      openTaskEditor(sec, id, item.label, {
-        onSave: (tid, novo) => {
+      const idx = draft.customTasks[sec].findIndex((c) => c.id === id);
+      if (idx < 0) return;
+      const item = draft.customTasks[sec][idx];
+      openTaskEditor(item.label, !!draft[sec].tasks[id], {
+        onSave: (novo) => {
           item.label = novo;
           renderTasks(sec);
+          persistCatalog();
           toast('Tarefa renomeada.');
         },
-        onDelete: (tid) => {
-          draft.customTasks[sec] = draft.customTasks[sec].filter((c) => c.id !== tid);
-          delete draft[sec].tasks[tid];
+        onDelete: () => {
+          const removed = item;
+          const wasDone = !!draft[sec].tasks[id];
+          draft.customTasks[sec].splice(idx, 1);
+          delete draft[sec].tasks[id];
           renderTasks(sec);
-          toast('Tarefa excluída.');
+          persistCatalog();
+          /* PROTEÇÃO: janela de Desfazer após a exclusão */
+          toast(`"${removed.label}" excluída.`, 'warn', 6000, {
+            label: 'Desfazer',
+            fn: () => {
+              const at = Math.min(idx, draft.customTasks[sec].length);
+              draft.customTasks[sec].splice(at, 0, removed);
+              draft[sec].tasks[id] = wasDone;
+              renderTasks(sec);
+              persistCatalog();
+              toast('Exclusão desfeita.');
+            }
+          });
         }
       });
     });
-    /* + adicionar (prompt) */
+
+    /* + Adicionar — o usuário digita o que fazer */
     $$('[data-addtask]').forEach((b) => b.onclick = () => {
       const sec = b.dataset.addtask;
-      const label = (window.prompt('Nova tarefa para "' + labelSec(sec) + '":') || '').trim();
+      const label = (window.prompt('Nova tarefa para "' + labelSec(sec) + '" — o que fazer?') || '').trim();
       if (!label) return;
       const id = 'ct-' + uid().slice(0, 8);
       draft.customTasks[sec].push({ id, label });
       draft[sec].tasks[id] = false;
       renderTasks(sec);
-      toast('Tarefa "' + label + '" adicionada. Toque no ✎ para editar.');
+      persistCatalog();
+      toast('Tarefa "' + label + '" adicionada. Toque no ✎ para editar ou excluir.');
     });
   }
   function renderTasks(sec){
@@ -1039,16 +1137,25 @@ Views.inspection = async ({ mode, reportId } = {}) => {
       <span class="hint">Câmera ou galeria • comprimida automaticamente</span>
     </div>`;
 
-  /* v15: seção da piscina com guia de medição + "Como está a água?" */
+  /* Chips de cor por parâmetro (v16) */
+  const colorRow = (k) => `
+    <span class="color-hint">Ou toque na cor que apareceu no teste:</span>
+    <div class="color-row" data-colors="${k}">
+      ${COLOR_MAP[k].map((c) => `
+        <button type="button" class="color-pick" data-color="${k}" data-v="${c.v}" data-l="${esc(c.l)}">
+          <i style="background:${c.c}"></i><small>${esc(c.l)}</small>
+        </button>`).join('')}
+    </div>`;
+
   const poolBody = () => `
     <div class="vol-line">${icon('droplet')}<span>Litragem do sítio: <strong id="volChip">${volLabel()}</strong></span></div>
     <button type="button" class="add-task" id="howMeasure" style="border-style:solid;border-color:var(--pool-light);background:var(--pool-light);color:var(--pool-deep)">${icon('book')} Como medir? Guia de cores do teste</button>
-    <p class="hint">Meça com o kit de gotas ou fita-teste e digite os valores abaixo. O app avalia a água e diz o que fazer.</p>
+    <p class="hint">Meça com o kit de gotas ou fita-teste, toque na cor que apareceu ou digite o valor. O app avalia a água e diz a manutenção necessária.</p>
     <div class="grid2">
-      <label class="field"><span>pH</span><input type="number" step="0.1" min="0" max="14" inputmode="decimal" data-meas="ph" value="${esc(draft.pool.ph)}" placeholder="7,4"></label>
-      <label class="field"><span>Cloro (ppm)</span><input type="number" step="0.1" min="0" inputmode="decimal" data-meas="cloro" value="${esc(draft.pool.cloro)}" placeholder="1,5"></label>
-      <label class="field"><span>Alcalinidade (ppm)</span><input type="number" step="1" min="0" inputmode="numeric" data-meas="alcal" value="${esc(draft.pool.alcal)}" placeholder="100"></label>
-      <label class="field"><span>Dureza Cálcica (ppm)</span><input type="number" step="10" min="0" inputmode="numeric" data-meas="dureza" value="${esc(draft.pool.dureza)}" placeholder="250"></label>
+      <label class="field"><span>pH</span><input type="number" step="0.1" min="0" max="14" inputmode="decimal" data-meas="ph" value="${esc(draft.pool.ph)}" placeholder="7,4">${colorRow('ph')}</label>
+      <label class="field"><span>Cloro (ppm)</span><input type="number" step="0.1" min="0" inputmode="decimal" data-meas="cloro" value="${esc(draft.pool.cloro)}" placeholder="1,5">${colorRow('cloro')}</label>
+      <label class="field"><span>Alcalinidade (ppm)</span><input type="number" step="1" min="0" inputmode="numeric" data-meas="alcal" value="${esc(draft.pool.alcal)}" placeholder="100">${colorRow('alcal')}</label>
+      <label class="field"><span>Dureza Cálcica (ppm)</span><input type="number" step="10" min="0" inputmode="numeric" data-meas="dureza" value="${esc(draft.pool.dureza)}" placeholder="250">${colorRow('dureza')}</label>
     </div>
     <div class="ref-chips"><span>pH 7,2–7,6</span><span>Cloro 1,0–3,0</span><span>Alc. 80–120</span><span>Dureza 200–400</span></div>
     <div id="recBox"></div>
@@ -1106,7 +1213,6 @@ Views.inspection = async ({ mode, reportId } = {}) => {
 
   App.el.innerHTML = topbar('Nova Vistoria', editSource ? '#/relatorio/' + editSource.id : '#/') + `
   <main class="view container">
-    <!-- v15: selo do modo fixo + trocar -->
     <div class="card mode-locked">
       ${icon(effMode === 'hospedes' ? 'user' : 'clipboard')}
       <span>Tipo: <b>${labelMode(effMode)}</b></span>
@@ -1147,7 +1253,8 @@ Views.inspection = async ({ mode, reportId } = {}) => {
   }
   rebuildSelect();
 
-  /* v15: "Como está a água?" + recomendações */
+  /* v16: "Como está a água?" — interpreta cada parâmetro
+     (número digitado OU cor tocada) e instrui a manutenção */
   function renderRecs(){
     const box = $('#recBox');
     if (!box) return;
@@ -1155,9 +1262,9 @@ Views.inspection = async ({ mode, reportId } = {}) => {
     const recs = computeRecs(vol, draft.pool.cloro, draft.pool.ph, draft.pool.dureza);
 
     const defs = [
-      ['pH',     'ph',     draft.pool.ph],
-      ['Cloro',  'cloro',  draft.pool.cloro],
-      ['Alcalinidade', 'alcal', draft.pool.alcal],
+      ['pH',             'ph',     draft.pool.ph],
+      ['Cloro',          'cloro',  draft.pool.cloro],
+      ['Alcalinidade',   'alcal',  draft.pool.alcal],
       ['Dureza Cálcica', 'dureza', draft.pool.dureza]
     ];
     const rows = defs
@@ -1183,7 +1290,7 @@ Views.inspection = async ({ mode, reportId } = {}) => {
           </div>`).join('')}
       </div>`;
     } else {
-      html += `<div class="alert warn">${icon('book')}<span>Meça os parâmetros com o kit e digite aqui — o app interpreta as cores do teste e diz o que a água precisa.</span></div>`;
+      html += `<div class="alert warn">${icon('book')}<span>Meça os parâmetros com o kit: toque na <b>cor</b> que apareceu no teste ou digite o valor — o app diz o que a água precisa.</span></div>`;
     }
     if (recs.length){
       html += `<div class="alert warn"><ul>${recs.map((r) => `<li>${icon('droplet')}<span>${esc(r.text)}</span></li>`).join('')}</ul></div>`;
@@ -1223,11 +1330,11 @@ Views.inspection = async ({ mode, reportId } = {}) => {
 
   $('#inspDate').onchange = (e) => { draft.dateISO = e.target.value; };
 
-  /* v15: guia de cores */
+  /* Guia de cores */
   const hm = $('#howMeasure');
   if (hm) hm.onclick = openMeasureGuide;
 
-  /* v15: trocar tipo (descarta o que foi digitado) */
+  /* Trocar tipo */
   const cm = $('#changeMode');
   if (cm) cm.onclick = async () => {
     if (await confirmDlg({
@@ -1239,7 +1346,7 @@ Views.inspection = async ({ mode, reportId } = {}) => {
     }
   };
 
-  /* v15: campos do hóspede (só existem no modo Hóspedes) */
+  /* Hóspede (só no modo Hóspedes) */
   function bindGuest(){
     const name = $('#gName');   if (name) name.oninput = (e) => draft.guest.name = e.target.value;
     const wpp  = $('#gWpp');    if (wpp)  wpp.oninput  = (e) => draft.guest.whatsapp = e.target.value;
@@ -1265,9 +1372,20 @@ Views.inspection = async ({ mode, reportId } = {}) => {
     card.classList.toggle('on', e.target.checked);
   });
 
+  /* Números digitados */
   $$('[data-meas]').forEach((i) => i.oninput = (e) => {
     draft.pool[e.target.dataset.meas] = e.target.value;
     renderRecs();
+  });
+
+  /* v16: cores tocadas → preenchem o parâmetro e disparam a análise */
+  $$('[data-color]').forEach((b) => b.onclick = () => {
+    const k = b.dataset.color, v = b.dataset.v, l = b.dataset.l;
+    draft.pool[k] = v;
+    const inp = $(`[data-meas="${k}"]`);
+    if (inp) inp.value = v;
+    renderRecs();
+    toast(`${PARAM_NAMES[k]} pela cor "${l}" ≈ ${String(v).replace('.', ',')}. Veja "Como está a água?".`, 'info', 3600);
   });
 
   $('#gardenNotes').addEventListener('input', (e) => { draft.garden.notes = e.target.value; });
@@ -1353,7 +1471,7 @@ Views.inspection = async ({ mode, reportId } = {}) => {
         sections: active,
         mode: draft.mode,
         guest: draft.mode === 'hospedes' ? draft.guest : null,
-        customTasks: draft.customTasks,
+        customTasks: draft.customTasks, /* v16: lista completa do usuário */
         pool: Object.assign({}, draft.pool, {
           volume: vol,
           recs: computeRecs(vol, draft.pool.cloro, draft.pool.ph, draft.pool.dureza)
@@ -1367,14 +1485,14 @@ Views.inspection = async ({ mode, reportId } = {}) => {
       if (editSource) report.editedAt = Date.now();
       delete report.pdfBase64;
 
-      await DB.put('reports', report); /* 1/2: relatório salvo antes do PDF */
+      await DB.put('reports', report);
 
       let pdfOk = true;
       try {
         btn.innerHTML = '<span class="spin"></span> Gerando PDF…';
         const blob = await ReportPDF.build(report, site, settings);
         report.pdfBase64 = await blobToB64(blob);
-        await DB.put('reports', report); /* 2/2: PDF persistido */
+        await DB.put('reports', report);
       } catch (err){
         pdfOk = false;
         console.error('Falha na geração do PDF:', err);
@@ -1695,7 +1813,7 @@ Views.settings = async () => {
     <section class="card form">
       <h2 style="font-size:.74rem;letter-spacing:.12em;color:var(--pool);text-transform:uppercase;font-weight:800">Dados</h2>
       <button class="btn ghost block" id="wipeBtn" style="color:var(--bad)">${icon('trash')} Apagar todos os dados locais</button>
-      <p class="hint">Os dados ficam salvos apenas neste aparelho (IndexedDB), com acesso total offline. Fotos são comprimidas para 1280px/JPEG antes de salvar.</p>
+      <p class="hint">Os dados ficam salvos apenas neste aparelho (IndexedDB), com acesso total offline. Fotos são comprimidas para 1280px/JPEG antes de salvar. Suas tarefas personalizadas ficam salvas como catálogo e reaparecem nas próximas vistorias.</p>
     </section>
   </main>`;
 
@@ -1757,7 +1875,7 @@ Views.settings = async () => {
   };
 
   $('#wipeBtn').onclick = async () => {
-    if (!await confirmDlg({ title: 'Apagar todos os dados?', text: 'Sítios, relatórios e ajustes deste aparelho serão removidos definitivamente.', okLabel: 'Apagar tudo', danger: true })) return;
+    if (!await confirmDlg({ title: 'Apagar todos os dados?', text: 'Sítios, relatórios, tarefas personalizadas e ajustes deste aparelho serão removidos definitivamente.', okLabel: 'Apagar tudo', danger: true })) return;
     await Promise.all([DB.clear('sites'), DB.clear('reports'), DB.clear('settings')]);
     toast('Dados apagados.');
     location.hash = '#/';
@@ -1794,9 +1912,18 @@ async function normalizeReports(){
       r.sections = ['pool', 'site', 'garden', 'house'].filter((k) => r[k] && r[k].active);
       changed = true;
     }
+    /* v16: relatórios antigos ganham a lista completa de tarefas
+       (fixas mescladas) para o PDF e a edição funcionarem igual */
     if (!r.customTasks || typeof r.customTasks !== 'object'){
       r.customTasks = { pool: [], site: [], garden: [], house: [] }; changed = true;
     }
+    TASK_SECTIONS.forEach((sec) => {
+      const arr = Array.isArray(r.customTasks[sec]) ? r.customTasks[sec] : [];
+      if (!arr.length){
+        r.customTasks[sec] = (ReportPDF.TASKS[sec] || []).map(([k, l]) => ({ id: k, label: l }));
+        changed = true;
+      }
+    });
     if (typeof r.mode === 'undefined'){ r.mode = 'manutencao'; changed = true; }
     if (typeof r.guest === 'undefined'){ r.guest = null; changed = true; }
 
