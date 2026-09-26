@@ -1,37 +1,36 @@
 /* =========================================================
-   NEGRET'S MASTER — js/app.js (v8 — reescrita completa)
+   NEGRET'S MASTER — js/app.js (v14 — arquivo completo)
    -----------------------------------------------------------
-   Novidades v8:
-   • APP_VERSION visível em Ajustes → fim da dúvida "qual
-     versão está rodando no celular?".
-   • Diagnóstico PWA fiel: tenta registrar o sw.js na hora e
-     mostra o erro real; não falha por PNG ausente quando o
-     Chrome já liberou a instalação.
-   • Botão Instalar com try/catch e feedback (aceito/cancelado/
-     erro) — antes, falhava silenciosamente.
-   • NOVO: "Forçar atualização dos arquivos" — limpa caches e
-     Service Workers MANTENDO os dados (IndexedDB intacto).
-   Estrutura:
-   1 CONFIG · 2 UTILS · 3 ÍCONES · 4 TOAST/MODAL · 5 AJUSTES
-   6 SINCRONIZAÇÃO · 7 UI HELPERS · 8 FOTOS · 9 CÁLCULOS
-   10 MODAL NOVO CLIENTE · 11 ROUTER · 12 VIEWS · 13 MIGRAÇÃO
-   14 BOOT
+   • Abas Manutenção / Hóspedes no topo da vistoria
+   • Card de Hóspedes: contratante, WhatsApp, qtd pessoas,
+     check-in/out, tags "Entrou na piscina" / "Saiu — choque"
+   • Hóspede com SAÍDA marcada exige: nome + parâmetros da
+     piscina (4 medidas) + seção Casa Sede ativa
+   • Módulo D: Casa Sede — Limpeza da Casa
+   • TODAS as tarefas são CARDS clicáveis (azul + ✓)
+   • "+ Adicionar nova tarefa" em A/B/C/D (via prompt)
+   • Litragem manual (cliente informou) com prioridade
+   • Dureza Cálcica com recomendação automática
+   • Diagnóstico PWA + versão visível em Ajustes
+   Obs.: o Service Worker é registrado no index.html —
+   aqui não há registro duplicado.
    ========================================================= */
 'use strict';
 
 /* =========================================================
    1. CONFIG
    ========================================================= */
-const APP_VERSION = '8.0.0'; /* aparece em Ajustes — suba a cada publicação */
+const APP_VERSION = '14.0.0';
 
 const CONFIG = {
-  /* URL de nuvem futura (Apps Script etc.). Vazio = 100% local. */
+  /* URL de nuvem futura (Google Apps Script etc.).
+     Vazio = modo 100% local — nada sai do aparelho. */
   SYNC_ENDPOINT: ''
 };
 
-const PHOTO_MAX_DIM = 1280;
-const PHOTO_QUALITY = 0.65;
-const MAX_PHOTOS    = 8;
+const PHOTO_MAX_DIM = 1280; /* lado maior da foto após compressão */
+const PHOTO_QUALITY = 0.65; /* qualidade JPEG                     */
+const MAX_PHOTOS    = 8;    /* por campo antes/depois de cada seção */
 
 /* =========================================================
    2. UTILITÁRIOS
@@ -126,8 +125,8 @@ const logoSVG = (s = 44) => `
 </svg>`;
 
 const checkSVG = `<svg viewBox="0 0 80 80" fill="none" stroke-linecap="round" stroke-linejoin="round">
-  <circle cx="40" cy="40" r="34" stroke="#1B87D6" stroke-width="5"/>
-  <path d="M26 41.5l10 10 18-21" stroke="#0B2A4A" stroke-width="6"/>
+  <circle cx="40" cy="40" r="34" stroke="#1E88E5" stroke-width="5"/>
+  <path d="M26 41.5l10 10 18-21" stroke="#0C2D4D" stroke-width="6"/>
 </svg>`;
 
 /* =========================================================
@@ -234,7 +233,7 @@ const emptyState = (ic, title, text, href, btn) => `
     ${href ? `<button class="btn primary" onclick="location.hash='${href}'">${esc(btn)}</button>` : ''}
   </div>`;
 
-const labelSec = (k) => ({ pool: 'Piscina', site: 'Sítio', garden: 'Roçada' }[k] || k);
+const labelSec = (k) => ({ pool: 'Piscina', site: 'Sítio', garden: 'Roçada', house: 'Casa Sede' }[k] || k);
 
 function animateNumber(el, to, dur = 550){
   if (!el) return;
@@ -291,7 +290,7 @@ async function compressImage(file){
       c.width  = Math.max(1, Math.round(bmp.width * scale));
       c.height = Math.max(1, Math.round(bmp.height * scale));
       c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
-      if (bmp.close) bmp.close();
+      if (bmp.close) bmp.close(); /* libera a imagem original da RAM */
       const out = c.toDataURL('image/jpeg', PHOTO_QUALITY);
       c.width = c.height = 0;
       return out;
@@ -318,7 +317,6 @@ function calcVolume(shape, { length = 0, width = 0, diameter = 0, depth = 0 } = 
   return 0;
 }
 
-/* Prioridade: litragem manual do cliente > cálculo pelas dimensões */
 function effectiveVolume(manualStr, shape, dims){
   const m = parseFloat(manualStr) || 0;
   if (m > 0) return { volume: Math.round(m), source: 'manual' };
@@ -342,7 +340,7 @@ function computeRecs(vol, cloro, ph, dureza){
 }
 
 /* =========================================================
-   10. MODAL "NOVO CLIENTE" (cadastro rápido + litragem manual)
+   10. MODAL "NOVO CLIENTE" (cadastro rápido, com litragem manual)
    ========================================================= */
 function openClientModal(onSaved){
   const back = document.createElement('div');
@@ -443,7 +441,7 @@ function openClientModal(onSaved){
 }
 
 /* =========================================================
-   11. ROUTER
+   11. ROUTER (SPA por hash)
    ========================================================= */
 const App = {
   el: null,
@@ -524,7 +522,7 @@ Views.dashboard = async () => {
       <span class="cta-tx">
         <small>NOVO RELATÓRIO</small>
         <strong>INICIAR NOVA VISTORIA</strong>
-        <em>Parâmetros químicos, checklist, fotos e PDF do sítio</em>
+        <em>Manutenção ou Hóspedes • química, limpeza, roçada e casa</em>
       </span>
       <span class="pill">COMEÇAR</span>
     </button>
@@ -575,7 +573,7 @@ Views.dashboard = async () => {
   $('#syncNow').onclick     = () => Sync.syncNow();
 };
 
-/* ---------- 12.2 SÍTIOS ---------- */
+/* ---------- 12.2 SÍTIOS (lista) ---------- */
 Views.sites = async () => {
   const sites = (await DB.all('sites')).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
 
@@ -618,7 +616,7 @@ Views.sites = async () => {
   });
 };
 
-/* ---------- 12.3 CADASTRO COMPLETO (com litragem manual) ---------- */
+/* ---------- 12.3 CADASTRO COMPLETO DE SÍTIO ---------- */
 Views.siteForm = async ({ id } = {}) => {
   const site = id ? await DB.get('sites', id) : null;
   const f = site ? { ...site }
@@ -718,7 +716,7 @@ Views.siteForm = async ({ id } = {}) => {
     if (!String(data.ownerName || '').trim() || !String(data.siteName || '').trim())
       return toast('Preencha proprietário e nome do sítio.', 'warn');
 
-    /* PERSISTÊNCIA: perfil completo no IndexedDB, com origem da litragem */
+    /* PERSISTÊNCIA: perfil completo (com litragem e origem) no IndexedDB */
     const eff = effectiveVolume(data.manualVolume || '', data.poolShape, {
       length: data.length, width: data.width, diameter: data.diameter, depth: data.depth
     });
@@ -744,9 +742,10 @@ Views.siteForm = async ({ id } = {}) => {
   };
 };
 
-/* ---------- 12.4 VISTORIA (nova + edição) ---------- */
+/* ---------- 12.4 VISTORIA (nova + edição) — v14 ---------- */
 Views.inspection = async ({ siteId, reportId } = {}) => {
   const TASKS = ReportPDF.TASKS;
+  const SECS = ['pool', 'site', 'garden', 'house'];
   const [sites, settings] = await Promise.all([DB.all('sites'), getSettings()]);
   const editSource = reportId ? await DB.get('reports', reportId) : null;
 
@@ -761,6 +760,7 @@ Views.inspection = async ({ siteId, reportId } = {}) => {
     return;
   }
 
+  /* ---- Fábricas defensivas: nunca retornam null/undefined ---- */
   const taskSet = (src, keys) => {
     const t = {};
     keys.forEach(([k]) => { t[k] = !!(src && src.tasks && src.tasks[k]); });
@@ -773,16 +773,42 @@ Views.inspection = async ({ siteId, reportId } = {}) => {
       after:  Array.isArray(ph.after)  ? ph.after.slice()  : []
     };
   };
+  const customSet = (src) => {
+    const ct = g(src, 'customTasks', {});
+    const out = {};
+    SECS.forEach((sec) => {
+      const arr = Array.isArray(ct[sec]) ? ct[sec] : [];
+      out[sec] = arr.filter((c) => c && c.id && c.label)
+                    .map((c) => ({ id: String(c.id), label: String(c.label) }));
+    });
+    return out;
+  };
   const secDraft = (src, keys, extra) => Object.assign({
     active: !!g(src, 'active', false),
     tasks: taskSet(src, keys),
     photos: photoSet(src)
   }, extra || {});
 
+  /* ---- Rascunho da vistoria (persistido ao finalizar) ---- */
   const draft = {
+    /* v14: modo de atendimento + registro do hóspede */
+    mode: g(editSource, 'mode', 'manutencao'),
+    guest: (function (gh){
+      gh = gh || {};
+      return {
+        name: String(g(gh, 'name', '')),
+        whatsapp: String(g(gh, 'whatsapp', '')),
+        people: String(g(gh, 'people', '')),
+        checkin: String(g(gh, 'checkin', '')),
+        checkout: String(g(gh, 'checkout', '')),
+        entered: !!g(gh, 'entered', false),
+        left: !!g(gh, 'left', false)
+      };
+    })(editSource && editSource.guest),
     siteId: g(editSource, 'siteId',
       (siteId && sites.some((s) => s.id === siteId)) ? siteId : (sites[0] ? sites[0].id : '')),
     dateISO: (editSource ? String(editSource.dateISO).slice(0, 10) : hojeISO()),
+    customTasks: customSet(editSource),
     pool: secDraft(editSource && editSource.pool, TASKS.pool, {
       active: editSource ? !!g(editSource.pool, 'active', false) : true,
       ph:     String(g(editSource && editSource.pool, 'ph', '')),
@@ -794,6 +820,7 @@ Views.inspection = async ({ siteId, reportId } = {}) => {
     garden: secDraft(editSource && editSource.garden, TASKS.garden, {
       notes: String(g(editSource && editSource.garden, 'notes', ''))
     }),
+    house: secDraft(editSource && editSource.house, TASKS.house),
     generalNotes: String(g(editSource, 'generalNotes', ''))
   };
 
@@ -815,11 +842,43 @@ Views.inspection = async ({ siteId, reportId } = {}) => {
     s.volume ? `<span>${icon('droplet')}${fmt0.format(s.volume)} L${s.volumeSource === 'manual' ? ' •' : ''}</span>` : ''
   ].filter(Boolean).join('');
 
-  const checkGrid = (sec, items) => items.map(([k, lbl]) => `
-    <label class="chk">
-      <input type="checkbox" data-sec="${sec}" data-key="${k}" ${draft[sec].tasks[k] ? 'checked' : ''}>
-      <span class="box">${icon('check')}</span><span>${lbl}</span>
-    </label>`).join('');
+  /* ---- Cards clicáveis de tarefa (fixas + personalizadas) ---- */
+  const taskCards = (sec) => {
+    const all = TASKS[sec].map(([k, lbl]) => ({ id: k, label: lbl }))
+      .concat(draft.customTasks[sec]);
+    return `
+      <div class="task-grid">
+        ${all.map((t) => `
+          <button type="button" class="task-card ${draft[sec].tasks[t.id] ? 'on' : ''}" data-task="${sec}" data-key="${esc(t.id)}">
+            <span class="tc-check">${icon('check')}</span><span>${esc(t.label)}</span>
+          </button>`).join('')}
+      </div>
+      <button type="button" class="add-task" data-addtask="${sec}">${icon('plus')} Adicionar nova tarefa</button>`;
+  };
+  const tasksBlock = (sec) => `<div data-tasks="${sec}">${taskCards(sec)}</div>`;
+
+  function bindTaskCards(){
+    $$('.task-card').forEach((b) => b.onclick = () => {
+      const sec = b.dataset.task, key = b.dataset.key;
+      draft[sec].tasks[key] = !draft[sec].tasks[key];
+      b.classList.toggle('on', draft[sec].tasks[key]);
+    });
+    $$('[data-addtask]').forEach((b) => b.onclick = () => {
+      const sec = b.dataset.addtask;
+      const label = (window.prompt('Nova tarefa para "' + labelSec(sec) + '":') || '').trim();
+      if (!label) return;
+      const id = 'ct-' + uid().slice(0, 8);
+      draft.customTasks[sec].push({ id, label });
+      draft[sec].tasks[id] = false;
+      renderTasks(sec);
+      toast('Tarefa "' + label + '" adicionada a ' + labelSec(sec) + '.');
+    });
+  }
+  function renderTasks(sec){
+    const host = $(`[data-tasks="${sec}"]`);
+    if (host) host.innerHTML = taskCards(sec);
+    bindTaskCards();
+  }
 
   const photoSlot = (sec, kind, label) => `
     <div class="photo-slot" data-sec="${sec}" data-kind="${kind}">
@@ -843,20 +902,25 @@ Views.inspection = async ({ siteId, reportId } = {}) => {
     <div class="ref-chips"><span>pH 7,2–7,6</span><span>Cloro 1,0–3,0</span><span>Alc. 80–120</span><span>Dureza 200–400</span></div>
     <div id="recBox"></div>
     <span class="field-lbl">Tarefas Executadas</span>
-    <div class="chk-grid">${checkGrid('pool', TASKS.pool)}</div>
+    ${tasksBlock('pool')}
     <div class="photo-row">${photoSlot('pool', 'before', 'ANTES')}${photoSlot('pool', 'after', 'DEPOIS')}</div>`;
 
   const siteBody = () => `
     <span class="field-lbl">Tarefas Executadas</span>
-    <div class="chk-grid">${checkGrid('site', TASKS.site)}</div>
+    ${tasksBlock('site')}
     <div class="photo-row">${photoSlot('site', 'before', 'ANTES')}${photoSlot('site', 'after', 'DEPOIS')}</div>`;
 
   const gardenBody = () => `
     <span class="field-lbl">Áreas Roçadas</span>
-    <div class="chk-grid">${checkGrid('garden', TASKS.garden)}</div>
+    ${tasksBlock('garden')}
     <label class="field"><span>Observações da Roçada</span>
       <textarea id="gardenNotes" rows="2" placeholder="Ex.: mato alto próximo ao pomar…">${esc(draft.garden.notes)}</textarea></label>
     <div class="photo-row">${photoSlot('garden', 'before', 'ANTES')}${photoSlot('garden', 'after', 'DEPOIS')}</div>`;
+
+  const houseBody = () => `
+    <span class="field-lbl">Ambientes / Tarefas da Casa</span>
+    ${tasksBlock('house')}
+    <div class="photo-row">${photoSlot('house', 'before', 'ANTES')}${photoSlot('house', 'after', 'DEPOIS')}</div>`;
 
   const secCard = (key, letter, accent, title, sub, body) => `
     <section class="card sec ${draft[key].active ? 'on' : 'off'}" data-sec-card="${key}">
@@ -868,11 +932,38 @@ Views.inspection = async ({ siteId, reportId } = {}) => {
       <div class="sec-body">${body}</div>
     </section>`;
 
+  const guestBoxHTML = () => `
+    <div class="card form" id="guestCard">
+      <div class="grid2">
+        <label class="field" style="grid-column:1/-1"><span>Nome do hóspede contratante *</span>
+          <input id="gName" value="${esc(draft.guest.name)}" placeholder="Ex.: João Pereira"></label>
+        <label class="field"><span>WhatsApp</span>
+          <input id="gWpp" inputmode="tel" value="${esc(draft.guest.whatsapp)}" placeholder="(31) 99999-0000"></label>
+        <label class="field"><span>Qtd pessoas</span>
+          <input id="gPeople" type="number" min="1" inputmode="numeric" value="${esc(draft.guest.people)}" placeholder="4"></label>
+        <label class="field"><span>Check-in</span>
+          <input id="gIn" type="date" value="${esc(draft.guest.checkin)}"></label>
+        <label class="field"><span>Check-out</span>
+          <input id="gOut" type="date" value="${esc(draft.guest.checkout)}"></label>
+      </div>
+      <span class="field-lbl">Situação da Piscina</span>
+      <div class="tag-row">
+        <button type="button" class="tag-toggle ${draft.guest.entered ? 'on' : ''}" data-gtag="entered">${icon('droplet')} Entrou na piscina</button>
+        <button type="button" class="tag-toggle warn ${draft.guest.left ? 'on' : ''}" data-gtag="left">${icon('alert')} Saiu — precisa choque</button>
+      </div>
+    </div>`;
+
   App.el.innerHTML = topbar(
     editSource ? 'Editar Relatório' : 'Nova Vistoria',
     editSource ? '#/relatorio/' + editSource.id : '#/'
   ) + `
   <main class="view container">
+    <div class="mode-tabs">
+      <button type="button" class="mode-tab ${draft.mode !== 'hospedes' ? 'on' : ''}" data-mode="manutencao">${icon('clipboard')} Manutenção</button>
+      <button type="button" class="mode-tab ${draft.mode === 'hospedes' ? 'on' : ''}" data-mode="hospedes">${icon('user')} Hóspedes</button>
+    </div>
+    <div id="guestWrap" style="display:${draft.mode === 'hospedes' ? 'block' : 'none'}">${guestBoxHTML()}</div>
+
     <div class="card form">
       <label class="field"><span>Sítio / Cliente</span>
         <select id="selSite"></select>
@@ -887,6 +978,7 @@ Views.inspection = async ({ siteId, reportId } = {}) => {
     ${secCard('pool', 'A', 'a', 'Parâmetros da Piscina', 'pH, cloro, alcalinidade, dureza e fotos', poolBody())}
     ${secCard('site', 'B', 'b', 'Limpeza do Sítio', 'Churrasqueira, varandas, banheiros e lixo', siteBody())}
     ${secCard('garden', 'C', 'c', 'Roçada e Jardinagem', 'Áreas roçadas e observações', gardenBody())}
+    ${secCard('house', 'D', 'd', 'Casa Sede', 'Limpeza da casa: ambientes e fotos', houseBody())}
 
     <div class="card form">
       <label class="field"><span>Observações Gerais da Visita</span>
@@ -939,6 +1031,7 @@ Views.inspection = async ({ siteId, reportId } = {}) => {
     });
   }
 
+  /* ---- Bindings ---- */
   $('#selSite').onchange = (e) => { draft.siteId = e.target.value; refreshSiteInfo(); renderRecs(); };
 
   $('#addClient').onclick = () => openClientModal((rec) => {
@@ -952,6 +1045,32 @@ Views.inspection = async ({ siteId, reportId } = {}) => {
 
   $('#inspDate').onchange = (e) => { draft.dateISO = e.target.value; };
 
+  /* v14: alternância Manutenção/Hóspedes */
+  $$('[data-mode]').forEach((b) => b.onclick = () => {
+    draft.mode = b.dataset.mode;
+    $$('[data-mode]').forEach((x) => x.classList.toggle('on', x === b));
+    $('#guestWrap').style.display = draft.mode === 'hospedes' ? 'block' : 'none';
+    bindGuest();
+  });
+
+  /* v14: campos e tags do hóspede */
+  function bindGuest(){
+    const name = $('#gName');   if (name) name.oninput = (e) => draft.guest.name = e.target.value;
+    const wpp  = $('#gWpp');    if (wpp)  wpp.oninput  = (e) => draft.guest.whatsapp = e.target.value;
+    const ppl  = $('#gPeople'); if (ppl)  ppl.oninput  = (e) => draft.guest.people = e.target.value;
+    const gi   = $('#gIn');     if (gi)   gi.onchange  = (e) => draft.guest.checkin = e.target.value;
+    const go   = $('#gOut');    if (go)   go.onchange  = (e) => draft.guest.checkout = e.target.value;
+    $$('[data-gtag]').forEach((tg) => tg.onclick = () => {
+      const k = tg.dataset.gtag;
+      draft.guest[k] = !draft.guest[k];
+      tg.classList.toggle('on', draft.guest[k]);
+      if (k === 'left' && draft.guest.left){
+        toast('Saída marcada: parâmetros da piscina e Casa Sede serão exigidos.', 'warn', 4200);
+      }
+    });
+  }
+  bindGuest();
+
   $$('[data-toggle]').forEach((sw) => sw.onchange = (e) => {
     const key = e.target.dataset.toggle;
     draft[key].active = e.target.checked;
@@ -963,10 +1082,6 @@ Views.inspection = async ({ siteId, reportId } = {}) => {
   $$('[data-meas]').forEach((i) => i.oninput = (e) => {
     draft.pool[e.target.dataset.meas] = e.target.value;
     renderRecs();
-  });
-
-  $$('.chk input').forEach((c) => c.onchange = (e) => {
-    draft[e.target.dataset.sec].tasks[e.target.dataset.key] = e.target.checked;
   });
 
   $('#gardenNotes').addEventListener('input', (e) => { draft.garden.notes = e.target.value; });
@@ -986,7 +1101,7 @@ Views.inspection = async ({ siteId, reportId } = {}) => {
         break;
       }
       try {
-        draft[sec].photos[kind].push(await compressImage(file));
+        draft[sec].photos[kind].push(await compressImage(file)); /* 1 por vez */
         renderThumbs(slot, sec, kind);
       } catch (_){
         toast('Não foi possível processar esta imagem. Tente pela galeria.', 'warn', 3600);
@@ -997,6 +1112,7 @@ Views.inspection = async ({ siteId, reportId } = {}) => {
   $('#finish').onclick = finalizar;
   refreshSiteInfo();
   renderRecs();
+  bindTaskCards();
   $$('.photo-slot').forEach((slot) =>
     renderThumbs(slot, slot.dataset.sec, slot.dataset.kind));
 
@@ -1004,7 +1120,24 @@ Views.inspection = async ({ siteId, reportId } = {}) => {
 
   async function finalizar(){
     if (!draft.siteId) return toast('Selecione o sítio.', 'warn');
-    const active = ['pool', 'site', 'garden'].filter((k) => draft[k].active);
+
+    /* v14: hóspede marcou SAÍDA → exigências obrigatórias */
+    if (draft.mode === 'hospedes' && draft.guest.left){
+      const faltando = [];
+      if (!draft.guest.name.trim()) faltando.push('nome do hóspede contratante');
+      if (!draft.pool.active) faltando.push('seção Parâmetros da Piscina ativa');
+      [['ph','pH'],['cloro','Cloro'],['alcal','Alcalinidade'],['dureza','Dureza Cálcica']]
+        .forEach(([k, lbl]) => { if (String(draft.pool[k]).trim() === '') faltando.push(lbl); });
+      if (!draft.house.active) faltando.push('seção Casa Sede ativa');
+      if (faltando.length){
+        return toast('Hóspede marcou SAÍDA — complete antes de concluir: ' + faltando.join(', ') + '.', 'warn', 6500);
+      }
+    } else if (draft.mode === 'hospedes' && !draft.guest.name.trim()){
+      const temDado = draft.guest.whatsapp || draft.guest.people || draft.guest.checkin || draft.guest.checkout || draft.guest.entered;
+      if (temDado) return toast('Informe o nome do hóspede contratante.', 'warn');
+    }
+
+    const active = SECS.filter((k) => draft[k].active);
     if (!active.length) return toast('Ative pelo menos uma seção da vistoria.', 'warn');
 
     const s0 = curSite();
@@ -1032,12 +1165,16 @@ Views.inspection = async ({ siteId, reportId } = {}) => {
         ownerName: site.ownerName,
         dateISO: draft.dateISO + 'T' + new Date().toTimeString().slice(0, 5),
         sections: active,
+        mode: draft.mode,
+        guest: draft.mode === 'hospedes' ? draft.guest : null,
+        customTasks: draft.customTasks,
         pool: Object.assign({}, draft.pool, {
           volume: vol,
           recs: computeRecs(vol, draft.pool.cloro, draft.pool.ph, draft.pool.dureza)
         }),
         site: draft.site,
         garden: draft.garden,
+        house: draft.house,
         generalNotes: draft.generalNotes,
         synced: false
       });
@@ -1080,7 +1217,7 @@ Views.history = async () => {
           <span class="item-ic">${icon('file')}</span>
           <div class="item-tx">
             <strong>${esc(r.siteName || 'Relatório')}</strong>
-            <span>${fmtDateBR(r.dateISO)} • ${(r.sections || []).map(labelSec).join(' + ')}${r.editedAt ? ' • editado' : ''}</span>
+            <span>${fmtDateBR(r.dateISO)} • ${(r.sections || []).map(labelSec).join(' + ')}${r.editedAt ? ' • editado' : ''}${r.mode === 'hospedes' ? ' • hóspedes' : ''}</span>
           </div>
           <span class="sync-dot ${r.synced ? 'ok' : 'pend'}" title="${r.synced ? 'Sincronizado' : 'Pendente'}"></span>
           <button class="del" aria-label="Excluir">${icon('trash')}</button>
@@ -1152,25 +1289,43 @@ Views.reportView = async ({ id }) => {
   const r = await DB.get('reports', id);
   if (!r){ location.hash = '#/historico'; return; }
 
-  const photoCount = ['pool', 'site', 'garden']
+  const photoCount = ['pool', 'site', 'garden', 'house']
     .filter((k) => r[k] && r[k].active)
     .reduce((acc, k) =>
       acc + g(r[k].photos, 'before', []).length + g(r[k].photos, 'after', []).length, 0);
 
+  /* Lista combinada (fixas + personalizadas) marcadas como feitas */
+  const doneList = (sec) =>
+    ReportPDF.combinedList(sec, r[sec] || {}, r.customTasks || {})
+      .filter(([, on]) => on).map(([lbl]) => lbl);
+
   const rows = [];
+  if (r.guest && r.guest.name){
+    rows.push(['Hóspede contratante', r.guest.name +
+      (r.guest.people ? ' • ' + r.guest.people + ' pessoa(s)' : '')]);
+    const per = [r.guest.checkin, r.guest.checkout].filter(Boolean).map(fmtDateBR).join(' → ');
+    if (per) rows.push(['Período', per]);
+    const sit = [r.guest.entered && 'Entrou na piscina', r.guest.left && 'Saiu — precisa choque']
+      .filter(Boolean).join(' • ');
+    if (sit) rows.push(['Situação da piscina', sit]);
+  }
   if (r.pool && r.pool.active){
     rows.push(['pH / Cloro / Alc. / Dureza',
       [r.pool.ph || '—', r.pool.cloro || '—', r.pool.alcal || '—', r.pool.dureza || '—'].join('  /  ')]);
-    const done = ReportPDF.TASKS.pool.filter(([k]) => r.pool.tasks && r.pool.tasks[k]).map(([, l]) => l);
+    const done = doneList('pool');
     rows.push(['Tarefas da piscina', done.length ? done.join(', ') : '—']);
   }
   if (r.site && r.site.active){
-    const done = ReportPDF.TASKS.site.filter(([k]) => r.site.tasks && r.site.tasks[k]).map(([, l]) => l);
+    const done = doneList('site');
     rows.push(['Limpeza do sítio', done.length ? done.join(', ') : '—']);
   }
   if (r.garden && r.garden.active){
-    const done = ReportPDF.TASKS.garden.filter(([k]) => r.garden.tasks && r.garden.tasks[k]).map(([, l]) => l);
+    const done = doneList('garden');
     rows.push(['Roçada', done.length ? done.join(', ') : '—']);
+  }
+  if (r.house && r.house.active){
+    const done = doneList('house');
+    rows.push(['Casa Sede', done.length ? done.join(', ') : '—']);
   }
 
   App.el.innerHTML = topbar('Relatório Nº ' + (r.code || '—'), '#/historico') + `
@@ -1182,7 +1337,7 @@ Views.reportView = async ({ id }) => {
     <section class="card done-card">
       <span class="done-check">${checkSVG}</span>
       <h2>Relatório pronto!</h2>
-      <p>${esc(r.siteName || '')} • ${fmtDateBR(r.dateISO)}${r.editedAt ? ' • <b>editado</b>' : ''}</p>
+      <p>${esc(r.siteName || '')} • ${fmtDateBR(r.dateISO)}${r.editedAt ? ' • <b>editado</b>' : ''}${r.mode === 'hospedes' ? ' • <b>hóspedes</b>' : ''}</p>
       <div class="chips">${(r.sections || []).map((k) => `<span>${labelSec(k)}</span>`).join('')}</div>
     </section>
 
@@ -1245,11 +1400,11 @@ Views.reportView = async ({ id }) => {
   });
 };
 
-/* ---------- 12.7 AJUSTES + DIAGNÓSTICO PWA (v8, fiel) ---------- */
+/* ---------- 12.7 AJUSTES + DIAGNÓSTICO PWA ---------- */
 
 /* Força atualização dos ARQUIVOS preservando os DADOS:
-   apaga Cache Storage, desregistra SWs e recarrega com
-   cache-buster. IndexedDB (clientes/relatórios) é intacto. */
+   apaga Cache Storage, desregistra SWs e recarrega.
+   IndexedDB (clientes/relatórios) fica intacto. */
 async function forceFileRefresh(){
   try {
     const keys = await caches.keys();
@@ -1269,7 +1424,7 @@ async function runPwaDiagnostics(){
     return rows;
   }
 
-  /* 1) SW registrado? Se não, registra AGORA e mostra o erro real */
+  /* SW registrado? Se não, registra AGORA e mostra o erro real */
   let reg = null;
   try { reg = await navigator.serviceWorker.getRegistration(); } catch (_) {}
   if (!reg){
@@ -1278,7 +1433,7 @@ async function runPwaDiagnostics(){
       push('ok', 'Service Worker registrado com sucesso agora.');
     } catch (e){
       push('fail', 'Registro do sw.js FALHOU: ' + ((e && e.message) || e));
-      push('fail', '→ Abra https://negrete79.github.io/sw.js no navegador. Se der 404, o arquivo não está na RAIZ (ou ficou "sw.js.txt").');
+      push('fail', '→ Abra https://negrete79.github.io/sw.js no navegador. Se der 404, o arquivo não está na RAIZ.');
     }
   } else {
     push(reg.active ? 'ok' : 'warn',
@@ -1291,7 +1446,7 @@ async function runPwaDiagnostics(){
       ? 'Página sob controle do SW — offline garantido.'
       : 'Página ainda não controlada: use "Forçar atualização" ou feche/abra o app (só na 1ª vez).');
 
-  /* 2) sw.js é servido e parece válido? */
+  /* sw.js é servido e parece válido? */
   try {
     const r3 = await fetch('sw.js', { cache: 'no-store' });
     if (!r3.ok){
@@ -1303,7 +1458,7 @@ async function runPwaDiagnostics(){
     }
   } catch (_){ push('fail', 'sw.js inacessível.'); }
 
-  /* 3) manifest + ícones (data URI não pode dar 404) */
+  /* manifest + ícones */
   try {
     const res = await fetch('manifest.json', { cache: 'no-store' });
     if (!res.ok){
@@ -1312,9 +1467,7 @@ async function runPwaDiagnostics(){
       const man = await res.json();
       push('ok', 'Manifest OK — “' + (man.name || man.short_name || '?') + '”.');
       const icons = Array.isArray(man.icons) ? man.icons : [];
-      if (!icons.length){
-        push('fail', 'O manifest não declara ícones.');
-      }
+      if (!icons.length) push('fail', 'O manifest não declara ícones.');
       for (const ic of icons){
         if (String(ic.src).startsWith('data:')){
           push('ok', 'Ícone embutido no manifest (impossível dar 404).');
@@ -1329,7 +1482,6 @@ async function runPwaDiagnostics(){
     }
   } catch (e){ push('fail', 'Falha ao ler o manifest: ' + e.message); }
 
-  /* 4) Veredito: a decisão é do Chrome, não nossa */
   push(deferredPrompt ? 'ok' : 'warn',
     deferredPrompt
       ? 'INSTALAÇÃO LIBERADA — toque no botão “Instalar na tela inicial”.'
@@ -1377,7 +1529,7 @@ Views.settings = async () => {
     toast('Ajustes salvos.');
   };
 
-  /* Instalar — com feedback real (antes falhava em silêncio) */
+  /* Botão instalar — com feedback real */
   const ib = $('#installBtn');
   if (deferredPrompt) ib.hidden = false;
 
@@ -1439,6 +1591,10 @@ Views.settings = async () => {
 
 /* =========================================================
    13. MIGRAÇÃO — normaliza relatórios/sítios antigos
+   Garante que todo relatório tenha: house, customTasks,
+   mode, guest, photos, tasks, sections e dureza no formato
+   atual. Assim nenhuma tela quebra, independente da idade
+   do dado gravado.
    ========================================================= */
 async function normalizeReports(){
   const reports = await DB.all('reports');
@@ -1460,13 +1616,20 @@ async function normalizeReports(){
       }
     };
     fixSec('pool'); fixSec('site'); fixSec('garden');
+    fixSec('house'); /* v14 */
 
     if (r.pool && typeof r.pool.dureza === 'undefined'){ r.pool.dureza = ''; changed = true; }
     if (!Array.isArray(r.sections)){
-      r.sections = ['pool', 'site', 'garden'].filter((k) => r[k] && r[k].active);
+      r.sections = ['pool', 'site', 'garden', 'house'].filter((k) => r[k] && r[k].active);
       changed = true;
     }
-    if (r.pdfBlob){ delete r.pdfBlob; changed = true; }
+    if (!r.customTasks || typeof r.customTasks !== 'object'){
+      r.customTasks = { pool: [], site: [], garden: [], house: [] }; changed = true;
+    }
+    if (typeof r.mode === 'undefined'){ r.mode = 'manutencao'; changed = true; }
+    if (typeof r.guest === 'undefined'){ r.guest = null; changed = true; }
+
+    if (r.pdfBlob){ delete r.pdfBlob; } /* formato muito antigo */
     if (changed) await DB.put('reports', r);
   }
 
@@ -1482,23 +1645,18 @@ async function normalizeReports(){
 
 /* =========================================================
    14. BOOT
+   (O Service Worker é registrado no index.html — sem duplicar.)
    ========================================================= */
 async function init(){
   console.log('[NEGRET\'S] App v' + APP_VERSION);
   App.el = $('#app');
+
+  /* Ícones da barra de navegação (index.html usa data-ic) */
   $$('[data-ic]').forEach((el) => { el.outerHTML = icon(el.dataset.ic); });
 
   await DB.open();
   await normalizeReports();
   App.render();
-
-  if ('serviceWorker' in navigator){
-    window.addEventListener('load', () => {
-      navigator.serviceWorker.register('./sw.js')
-        .then(() => console.log('[NEGRET\'S] SW registrado.'))
-        .catch((err) => console.error('[NEGRET\'S] SW falhou:', err));
-    });
-  }
 }
 
 window.addEventListener('beforeinstallprompt', (e) => {
