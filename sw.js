@@ -1,5 +1,5 @@
 /* =========================================================
-   NEGRET'S MASTER — sw.js (v11 — reescrita completa)
+   NEGRET'S MASTER — sw.js (v12 — reescrita completa)
    -----------------------------------------------------------
    Consistência total com o repositório REAL: o único ícone
    PNG existente na raiz é icon-maskable-512.png (confirmado
@@ -16,7 +16,7 @@
 'use strict';
 
 /* Suba este número a cada publicação de alteração. */
-const VERSION = 'negrets-master-v11';
+const VERSION = 'negrets-master-v12';
 
 /* ---------- App Shell — espelha EXATAMENTE o repositório ---------- */
 const APP_SHELL = [
