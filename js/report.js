@@ -1,7 +1,11 @@
 /* =========================================================
-   report.js — PDF timbrado v14
-   Seções A (Piscina+Dureza), B (Sítio), C (Roçada),
-   D (Casa Sede), Registro de Hóspedes, customTasks.
+   report.js — PDF timbrado v16
+   • Seções A (Piscina+Dureza), B (Sítio), C (Roçada),
+     D (Casa Sede), Registro de Hóspedes.
+   • v16: as tarefas são 100% gerenciadas pelo usuário —
+     customTasks é a fonte única (lista completa, fixas+
+     personalizadas mescladas ao salvar). Fallback mantido
+     para relatórios antigos sem customTasks.
    ========================================================= */
 const ReportPDF = (() => {
   'use strict';
@@ -20,6 +24,7 @@ const ReportPDF = (() => {
   const PT = { fibra:'Fibra', vinil:'Vinil', alvenaria:'Alvenaria' };
   const PS = { retangular:'Retangular', redonda:'Redonda' };
 
+  /* Tarefas padrão (seed do catálogo do usuário + fallback) */
   const TASKS = {
     pool:   [['aspiracao','Aspiração'],['peneira','Peneira'],['escovacao','Escovação de Bordas'],['filtro','Limpeza do Filtro']],
     site:   [['churrasqueira','Área da Churrasqueira Limpa'],['varandas','Varandas Varridas'],['banheiros','Banheiros Externos Higienizados'],['lixo','Recolhimento de Lixo']],
@@ -35,11 +40,13 @@ const ReportPDF = (() => {
     return s + '…';
   }
 
-  /* Tarefas fixas + personalizadas → [label, done][] */
+  /* v16: usa a lista completa do relatório (customTasks);
+     cai para as fixas apenas se customTasks estiver vazio. */
   function combinedList(secName, srcSec, customAll){
-    const custom = (customAll && Array.isArray(customAll[secName])) ? customAll[secName] : [];
-    return TASKS[secName].map(([k, l]) => [l, !!(srcSec && srcSec.tasks && srcSec.tasks[k])])
-      .concat(custom.map((c) => [String(c.label), !!(srcSec && srcSec.tasks && srcSec.tasks[c.id])]));
+    const src = (customAll && Array.isArray(customAll[secName]) && customAll[secName].length)
+      ? customAll[secName].map((c) => ({ id: String(c.id), label: String(c.label) }))
+      : TASKS[secName].map(([k, l]) => ({ id: k, label: l }));
+    return src.map((c) => [c.label, !!(srcSec && srcSec.tasks && srcSec.tasks[c.id])]);
   }
 
   async function build(report, site, settings){
