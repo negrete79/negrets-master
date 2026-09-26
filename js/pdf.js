@@ -1,8 +1,8 @@
 /* =========================================================
-   pdf.js — Mini motor de PDF (JS puro, sem libs) — v2
-   CORREÇÃO: objetos de stream agora são gravados como UM
-   único corpo (dict + binário + endstream), o que invalidava
-   o arquivo anterior. Fotos JPEG via /DCTDecode, offline.
+   pdf.js — Mini motor de PDF (JS puro, sem libs) — v14
+   Stream gravado como UM objeto (dict + binário + endstream).
+   Helvetica/WinAnsi (acentos PT-BR), fotos JPEG /DCTDecode.
+   y sempre a partir do TOPO da página.
    ========================================================= */
 const MiniPDF = (() => {
   'use strict';
@@ -147,7 +147,6 @@ const MiniPDF = (() => {
     }
 
     build(){
-      /* Cada elemento de objs = corpo COMPLETO de UM objeto (correção do bug) */
       const objs = [];
       const addStr    = (s)  => objs.push(bytesOf(s));
       const addStream = (dict, data) => objs.push(cat(bytesOf(dict + '\nstream\n'), data, bytesOf('\nendstream')));
