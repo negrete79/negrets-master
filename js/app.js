@@ -1,36 +1,33 @@
 /* =========================================================
-   NEGRET'S MASTER — js/app.js (v14 — arquivo completo)
+   NEGRET'S MASTER — js/app.js (v15 — arquivo completo)
    -----------------------------------------------------------
-   • Abas Manutenção / Hóspedes no topo da vistoria
-   • Card de Hóspedes: contratante, WhatsApp, qtd pessoas,
-     check-in/out, tags "Entrou na piscina" / "Saiu — choque"
-   • Hóspede com SAÍDA marcada exige: nome + parâmetros da
-     piscina (4 medidas) + seção Casa Sede ativa
-   • Módulo D: Casa Sede — Limpeza da Casa
-   • TODAS as tarefas são CARDS clicáveis (azul + ✓)
-   • "+ Adicionar nova tarefa" em A/B/C/D (via prompt)
-   • Litragem manual (cliente informou) com prioridade
-   • Dureza Cálcica com recomendação automática
-   • Diagnóstico PWA + versão visível em Ajustes
-   Obs.: o Service Worker é registrado no index.html —
-   aqui não há registro duplicado.
+   NOVO v15:
+   • Seleção de tipo em MODAL separado: Manutenção × Hóspedes
+     (rota #/vistoria → escolha; #/vistoria/hospedes etc.)
+   • Tarefas personalizadas EDITÁVEIS: botão ✎ no card
+     (renomear ou excluir via modal próprio)
+   • Guia "Como medir?" com CORES do teste (pH fenol vermelho,
+     cloro OTO, fita teste) na seção da piscina
+   • Cartão ao vivo "Como está a água?": interpreta cada
+     parâmetro pela cor/valor e instrui a ação com dosagem
+   Mantido de v14: módulo D Casa Sede, hóspede com saída
+   obrigando piscina+Casa Sede, litragem manual, dureza
+   cálcica, PDF timbrado, diagnóstico PWA, migração de dados.
    ========================================================= */
 'use strict';
 
 /* =========================================================
    1. CONFIG
    ========================================================= */
-const APP_VERSION = '14.0.0';
+const APP_VERSION = '15.0.0';
 
 const CONFIG = {
-  /* URL de nuvem futura (Google Apps Script etc.).
-     Vazio = modo 100% local — nada sai do aparelho. */
-  SYNC_ENDPOINT: ''
+  SYNC_ENDPOINT: '' /* nuvem futura; vazio = 100% local */
 };
 
-const PHOTO_MAX_DIM = 1280; /* lado maior da foto após compressão */
-const PHOTO_QUALITY = 0.65; /* qualidade JPEG                     */
-const MAX_PHOTOS    = 8;    /* por campo antes/depois de cada seção */
+const PHOTO_MAX_DIM = 1280;
+const PHOTO_QUALITY = 0.65;
+const MAX_PHOTOS    = 8;
 
 /* =========================================================
    2. UTILITÁRIOS
@@ -64,7 +61,6 @@ const saudacao = () => {
   return h < 12 ? 'Bom dia' : h < 18 ? 'Boa tarde' : 'Boa noite';
 };
 
-/* PDF é persistido como Base64 (texto) — máxima compatibilidade */
 const blobToB64 = (blob) => new Promise((res, rej) => {
   const fr = new FileReader();
   fr.onload = () => res(String(fr.result).split(',')[1]);
@@ -80,12 +76,11 @@ function b64ToBlob(b64){
   return new Blob([u8], { type: 'application/pdf' });
 }
 
-/* Leitura segura — nunca lança em null/undefined */
 const g = (obj, k, dflt) =>
   (obj && typeof obj === 'object' && obj[k] !== undefined && obj[k] !== null) ? obj[k] : dflt;
 
 /* =========================================================
-   3. ÍCONES (SVG inline — sem CDN, funciona offline)
+   3. ÍCONES
    ========================================================= */
 const ICONS = {
   home:'<path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>',
@@ -111,7 +106,8 @@ const ICONS = {
   phone:'<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>',
   edit:'<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4z"/>',
   shield:'<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
-  refresh:'<polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>'
+  refresh:'<polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>',
+  book:'<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>'
 };
 const icon = (name) =>
   `<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ''}</svg>`;
@@ -130,7 +126,7 @@ const checkSVG = `<svg viewBox="0 0 80 80" fill="none" stroke-linecap="round" st
 </svg>`;
 
 /* =========================================================
-   4. TOAST / MODAL
+   4. TOAST / MODAIS
    ========================================================= */
 function toast(msg, kind = 'ok', ms = 2800){
   const icMap = { ok: 'check', warn: 'alert', info: 'sync' };
@@ -160,8 +156,71 @@ function confirmDlg({ title, text, okLabel = 'Confirmar', danger = false }){
   });
 }
 
+/* v15: editor de tarefa — renomear ou excluir (modal próprio) */
+function openTaskEditor(sec, id, currentLabel, { onSave, onDelete }){
+  const back = document.createElement('div');
+  back.className = 'modal-back';
+  back.innerHTML = `
+    <div class="modal">
+      <h3>Editar tarefa</h3>
+      <label class="field" style="margin-bottom:16px"><span>Nome da tarefa</span>
+        <input id="teName" value="${esc(currentLabel)}"></label>
+      <div class="modal-actions" style="grid-template-columns:1fr 1fr 1fr">
+        <button class="btn danger" data-a="del">${icon('trash')}</button>
+        <button class="btn ghost" data-a="c">Cancelar</button>
+        <button class="btn primary" data-a="s">Salvar</button>
+      </div>
+    </div>`;
+  document.body.appendChild(back);
+  back.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-a]');
+    if (!b){ if (e.target === back) back.remove(); return; }
+    const a = b.dataset.a;
+    if (a === 'c'){ back.remove(); return; }
+    if (a === 'del'){
+      back.remove();
+      if (await confirmDlg({ title: 'Excluir tarefa?', text: `"${currentLabel}" será removida desta seção.`, okLabel: 'Excluir', danger: true })){
+        onDelete(id);
+      }
+      return;
+    }
+    const v = $('#teName', back).value.trim();
+    if (!v){ toast('O nome não pode ficar vazio.', 'warn'); return; }
+    back.remove();
+    onSave(id, v);
+  });
+}
+
+/* v15: guia de medição com cores do teste */
+function openMeasureGuide(){
+  const back = document.createElement('div');
+  back.className = 'modal-back';
+  back.innerHTML = `
+  <div class="modal" style="max-width:400px;max-height:88vh;overflow:auto">
+    <h3>Como medir? Guia de cores</h3>
+    <div style="display:flex;flex-direction:column;margin-bottom:14px">
+      <div class="guide-step">${icon('droplet')}<p><b>1. Colete a água certa</b><small>Braço estendido, ~40 cm da borda, na profundidade do cotovelo. Bomba ligada, água filtrada há algumas horas.</small></p></div>
+      <div class="guide-step">${icon('droplet')}<p><b>2. pH (gotas fenol vermelho)</b>
+        <small><span class="color-chip" style="background:#F2C230"></span>Amarelo = pH <b>BAIXO</b> (água ácida)<br>
+        <span class="color-chip" style="background:#E8792B"></span>Laranja = pH <b>IDEAL</b> (7,2–7,6)<br>
+        <span class="color-chip" style="background:#8E5BD6"></span>Roxo/Rosa = pH <b>ALTO</b> (água alcalina)</small></p></div>
+      <div class="guide-step">${icon('droplet')}<p><b>3. Cloro (gotas OTO ou DPD)</b>
+        <small><span class="color-chip" style="background:#F7E97F"></span>Amarelo claro = cloro <b>BAIXO</b><br>
+        <span class="color-chip" style="background:#F2C230"></span>Amarelo = <b>IDEAL</b> (1,0–3,0 ppm)<br>
+        <span class="color-chip" style="background:#B5821C"></span>Amarelo escuro/Marrom = <b>ALTO</b></small></p></div>
+      <div class="guide-step">${icon('droplet')}<p><b>4. Alcalinidade e Dureza</b><small>Use a fita-teste ou o frasco do kit e compare com a <b>escala impressa</b> no próprio frasco. Anote o número mais próximo da cor obtida.</small></p></div>
+      <div class="guide-step">${icon('check')}<p><b>Dicas finais</b><small>Compare as cores à luz do dia (nunca sob sol direto). Espere ~10 segundos após as gotas. Meça sempre no mesmo horário.</small></p></div>
+    </div>
+    <button class="btn primary block" data-a="c">Entendi, vamos medir</button>
+  </div>`;
+  document.body.appendChild(back);
+  back.addEventListener('click', (e) => {
+    if (e.target.closest('[data-a="c"]') || e.target === back) back.remove();
+  });
+}
+
 /* =========================================================
-   5. AJUSTES DA EMPRESA (store: settings)
+   5. AJUSTES DA EMPRESA
    ========================================================= */
 const DEFAULT_SETTINGS = {
   companyName: "NEGRET'S MASTER",
@@ -178,7 +237,7 @@ const saveSettings = (v) => DB.put('settings', { key: 'company', value: v });
 let deferredPrompt = null;
 
 /* =========================================================
-   6. SINCRONIZAÇÃO (indicador online/offline + envio futuro)
+   6. SINCRONIZAÇÃO
    ========================================================= */
 const netPillHTML = () => '<i class="dot"></i>' + (navigator.onLine ? 'Online' : 'Offline');
 
@@ -200,7 +259,7 @@ const Sync = {
     let ok = 0;
     for (const r of pend){
       try {
-        const { pdfBase64, ...json } = r; /* o PDF em si não vai no JSON */
+        const { pdfBase64, ...json } = r;
         const res = await fetch(CONFIG.SYNC_ENDPOINT, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -234,6 +293,7 @@ const emptyState = (ic, title, text, href, btn) => `
   </div>`;
 
 const labelSec = (k) => ({ pool: 'Piscina', site: 'Sítio', garden: 'Roçada', house: 'Casa Sede' }[k] || k);
+const labelMode = (m) => m === 'hospedes' ? 'Hóspedes' : 'Manutenção';
 
 function animateNumber(el, to, dur = 550){
   if (!el) return;
@@ -251,9 +311,6 @@ function animateNumber(el, to, dur = 550){
 
 /* =========================================================
    8. FOTOS — pipeline leve
-   • Sem atributo "capture": Android/iOS oferecem CÂMERA e GALERIA.
-   • createImageBitmap + .close() → baixo pico de memória.
-   • UMA foto por vez; fallback <img>+canvas p/ navegadores antigos.
    ========================================================= */
 function legacyCompress(file){
   return new Promise((resolve, reject) => {
@@ -290,7 +347,7 @@ async function compressImage(file){
       c.width  = Math.max(1, Math.round(bmp.width * scale));
       c.height = Math.max(1, Math.round(bmp.height * scale));
       c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
-      if (bmp.close) bmp.close(); /* libera a imagem original da RAM */
+      if (bmp.close) bmp.close();
       const out = c.toDataURL('image/jpeg', PHOTO_QUALITY);
       c.width = c.height = 0;
       return out;
@@ -301,10 +358,6 @@ async function compressImage(file){
 
 /* =========================================================
    9. CÁLCULOS
-   LITRAGEM:  Retangular C×L×P×1000 | Redonda D×D×P×0,785×1000
-   MANUAL:    valor informado pelo cliente TEM prioridade.
-   DOSAGEM:   Cloro <1,0 ppm → Vol×0,004 g | pH >7,6 → Vol×0,007 ml
-              Dureza cálcica <200 / >400 ppm → orientação
    ========================================================= */
 function calcVolume(shape, { length = 0, width = 0, diameter = 0, depth = 0 } = {}){
   const C = parseFloat(length)   || 0;
@@ -339,8 +392,43 @@ function computeRecs(vol, cloro, ph, dureza){
   return recs;
 }
 
+/* v15: veredito por parâmetro, com cor do teste e instrução */
+function paramVerdict(k, v, vol){
+  const n = parseFloat(v);
+  if (v === '' || v == null || isNaN(n)) return null;
+  if (k === 'ph'){
+    if (n < 7.2) return { st:'warn', dot:'#F2C230',
+      txt:'Água ÁCIDA (teste amarelo) — corrosiva, pode manchar e corroer equipamentos. Corrija com elevador de pH conforme o fabricante.' };
+    if (n > 7.6) return { st:'warn', dot:'#8E5BD6',
+      txt:`Água ALCALINA (teste roxo/rosa) — tende a ficar turva. Ação: adicionar ${fmt1.format((vol || 0) * 0.007)} ml de Redutor de pH.` };
+    return { st:'ok', dot:'#E8792B', txt:'pH equilibrado (teste laranja) — confortável para banho e protege os equipamentos.' };
+  }
+  if (k === 'cloro'){
+    if (n < 1) return { st:'warn', dot:'#F7E97F',
+      txt:`Cloro BAIXO (teste amarelo claro) — risco de algas e água esverdeada. Ação: adicionar ${fmt1.format((vol || 0) * 0.004)} g de Cloro. Reavalie após 2h com a bomba ligada.` };
+    if (n > 3) return { st:'warn', dot:'#B5821C',
+      txt:'Cloro ALTO (teste amarelo escuro/marrom) — não deixe banhistas entrarem. Espere o nível cair naturalmente e re-mede depois.' };
+    return { st:'ok', dot:'#F2C230', txt:'Cloro na faixa ideal (teste amarelo) — água sanitizada.' };
+  }
+  if (k === 'alcal'){
+    if (n < 80) return { st:'warn', dot:'#F5A524',
+      txt:'Alcalinidade BAIXA — o pH oscila fácil (água “instável”). Corrija com bicarbonato de sódio conforme o fabricante e re-mede o pH.' };
+    if (n > 120) return { st:'warn', dot:'#D97706',
+      txt:'Alcalinidade ALTA — o pH “trava” alto e a água pode ficar turva. Corrija com redutor de alcalinidade (ácido muriático) por etapas.' };
+    return { st:'ok', dot:'#188A52', txt:'Alcalinidade equilibrada — o pH se mantém estável.' };
+  }
+  if (k === 'dureza'){
+    if (n < 200) return { st:'warn', dot:'#6FA8DC',
+      txt:'Dureza BAIXA — água “agressiva” que corrói metais e piora o reboco. Corrija com cloreto de cálcio conforme a tabela do fabricante.' };
+    if (n > 400) return { st:'warn', dot:'#C0362C',
+      txt:'Dureza ALTA — risco de manchas brancas (calcário) e incrustações. Dilua com água nova ou use removedor de dureza.' };
+    return { st:'ok', dot:'#188A52', txt:'Dureza equilibrada — água confortável, sem incrustações.' };
+  }
+  return null;
+}
+
 /* =========================================================
-   10. MODAL "NOVO CLIENTE" (cadastro rápido, com litragem manual)
+   10. MODAL "NOVO CLIENTE"
    ========================================================= */
 function openClientModal(onSaved){
   const back = document.createElement('div');
@@ -434,28 +522,28 @@ function openClientModal(onSaved){
       volumeSource: eff.source,
       createdAt: Date.now(), updatedAt: Date.now()
     };
-    await DB.put('sites', rec); /* PERSISTÊNCIA: IndexedDB */
+    await DB.put('sites', rec);
     back.remove();
     onSaved(rec);
   });
 }
 
 /* =========================================================
-   11. ROUTER (SPA por hash)
+   11. ROUTER — #/vistoria agora é a SELEÇÃO de tipo (v15)
    ========================================================= */
 const App = {
   el: null,
   routes: [
-    { re: /^#\/?$/,                   view: 'dashboard',  m: () => ({}) },
-    { re: /^#\/sites$/,               view: 'sites',      m: () => ({}) },
-    { re: /^#\/site\/novo$/,          view: 'siteForm',   m: () => ({}) },
-    { re: /^#\/site\/([\w-]+)$/,      view: 'siteForm',   m: (m) => ({ id: m[1] }) },
-    { re: /^#\/vistoria$/,            view: 'inspection', m: () => ({}) },
-    { re: /^#\/vistoria\/([\w-]+)$/,  view: 'inspection', m: (m) => ({ siteId: m[1] }) },
-    { re: /^#\/editar\/([\w-]+)$/,    view: 'inspection', m: (m) => ({ reportId: m[1] }) },
-    { re: /^#\/historico$/,           view: 'history',    m: () => ({}) },
-    { re: /^#\/relatorio\/([\w-]+)$/, view: 'reportView', m: (m) => ({ id: m[1] }) },
-    { re: /^#\/ajustes$/,             view: 'settings',   m: () => ({}) }
+    { re: /^#\/?$/,                          view: 'dashboard',  m: () => ({}) },
+    { re: /^#\/sites$/,                      view: 'sites',      m: () => ({}) },
+    { re: /^#\/site\/novo$/,                 view: 'siteForm',   m: () => ({}) },
+    { re: /^#\/site\/([\w-]+)$/,             view: 'siteForm',   m: (m) => ({ id: m[1] }) },
+    { re: /^#\/vistoria$/,                   view: 'modeSelect', m: () => ({}) },
+    { re: /^#\/vistoria\/(manutencao|hospedes)$/, view: 'inspection', m: (m) => ({ mode: m[1] }) },
+    { re: /^#\/editar\/([\w-]+)$/,           view: 'inspection', m: (m) => ({ reportId: m[1] }) },
+    { re: /^#\/historico$/,                  view: 'history',    m: () => ({}) },
+    { re: /^#\/relatorio\/([\w-]+)$/,        view: 'reportView', m: (m) => ({ id: m[1] }) },
+    { re: /^#\/ajustes$/,                    view: 'settings',   m: () => ({}) }
   ],
   async render(){
     if (!this.el) return;
@@ -481,7 +569,7 @@ function updateNav(view){
   const map = {
     dashboard: 'dashboard', history: 'history', sites: 'sites',
     siteForm: 'sites', settings: 'settings',
-    inspection: 'inspection', reportView: 'history'
+    modeSelect: 'inspection', inspection: 'inspection', reportView: 'history'
   };
   const key = map[view] || 'dashboard';
   $$('.bnav a').forEach((a) => a.classList.toggle('active', a.dataset.nav === key));
@@ -522,7 +610,7 @@ Views.dashboard = async () => {
       <span class="cta-tx">
         <small>NOVO RELATÓRIO</small>
         <strong>INICIAR NOVA VISTORIA</strong>
-        <em>Manutenção ou Hóspedes • química, limpeza, roçada e casa</em>
+        <em>Escolha: Manutenção ou Hóspedes</em>
       </span>
       <span class="pill">COMEÇAR</span>
     </button>
@@ -573,7 +661,39 @@ Views.dashboard = async () => {
   $('#syncNow').onclick     = () => Sync.syncNow();
 };
 
-/* ---------- 12.2 SÍTIOS (lista) ---------- */
+/* ---------- 12.1b SELEÇÃO DE TIPO (v15 — modal separado) ---------- */
+Views.modeSelect = async () => {
+  App.el.innerHTML = topbar('Nova Vistoria', '#/') + `
+  <main class="view container">
+    <div class="card form">
+      <h2 style="font-size:.74rem;letter-spacing:.12em;color:var(--pool);text-transform:uppercase;font-weight:800">Qual é o tipo de atendimento hoje?</h2>
+      <button class="cta" id="pickManut" style="border-color:var(--pool-light)">
+        <span class="cta-ic">${icon('clipboard')}</span>
+        <span class="cta-tx">
+          <small>ROTINA DE CAMPO</small>
+          <strong>MANUTENÇÃO</strong>
+          <em>Piscina (química e limpeza), sítio, roçada e casa sede</em>
+        </span>
+        <span class="pill">ESCOLHER</span>
+      </button>
+      <button class="cta" id="pickHosp">
+        <span class="cta-ic" style="background:var(--navy);box-shadow:0 8px 18px rgba(12,45,77,.35)">${icon('user')}</span>
+        <span class="cta-tx">
+          <small>CONTROLE DE HÓSPEDES</small>
+          <strong>HÓSPEDES</strong>
+          <em>Contratante, check-in/out, uso da piscina e choque na saída</em>
+        </span>
+        <span class="pill">ESCOLHER</span>
+      </button>
+      <p class="hint">O tipo define o formulário: no modo <b>Hóspedes</b> é obrigatório registrar o contratante e, se marcar “Saiu — precisa choque”, os parâmetros da piscina e a Casa Sede passam a ser exigidos.</p>
+    </div>
+  </main>`;
+
+  $('#pickManut').onclick = () => location.hash = '#/vistoria/manutencao';
+  $('#pickHosp').onclick  = () => location.hash = '#/vistoria/hospedes';
+};
+
+/* ---------- 12.2 SÍTIOS ---------- */
 Views.sites = async () => {
   const sites = (await DB.all('sites')).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
 
@@ -616,7 +736,7 @@ Views.sites = async () => {
   });
 };
 
-/* ---------- 12.3 CADASTRO COMPLETO DE SÍTIO ---------- */
+/* ---------- 12.3 CADASTRO COMPLETO ---------- */
 Views.siteForm = async ({ id } = {}) => {
   const site = id ? await DB.get('sites', id) : null;
   const f = site ? { ...site }
@@ -716,7 +836,6 @@ Views.siteForm = async ({ id } = {}) => {
     if (!String(data.ownerName || '').trim() || !String(data.siteName || '').trim())
       return toast('Preencha proprietário e nome do sítio.', 'warn');
 
-    /* PERSISTÊNCIA: perfil completo (com litragem e origem) no IndexedDB */
     const eff = effectiveVolume(data.manualVolume || '', data.poolShape, {
       length: data.length, width: data.width, diameter: data.diameter, depth: data.depth
     });
@@ -742,12 +861,16 @@ Views.siteForm = async ({ id } = {}) => {
   };
 };
 
-/* ---------- 12.4 VISTORIA (nova + edição) — v14 ---------- */
-Views.inspection = async ({ siteId, reportId } = {}) => {
+/* ---------- 12.4 VISTORIA (v15 — modo fixo pela seleção) ---------- */
+Views.inspection = async ({ mode, reportId } = {}) => {
   const TASKS = ReportPDF.TASKS;
   const SECS = ['pool', 'site', 'garden', 'house'];
   const [sites, settings] = await Promise.all([DB.all('sites'), getSettings()]);
   const editSource = reportId ? await DB.get('reports', reportId) : null;
+
+  /* v15: modo vem da seleção (nova) ou do relatório (edição) */
+  const effMode = editSource ? g(editSource, 'mode', 'manutencao')
+                             : (mode === 'hospedes' ? 'hospedes' : 'manutencao');
 
   if (!sites.length && !editSource){
     App.el.innerHTML = topbar('Nova Vistoria', '#/') + `
@@ -760,7 +883,6 @@ Views.inspection = async ({ siteId, reportId } = {}) => {
     return;
   }
 
-  /* ---- Fábricas defensivas: nunca retornam null/undefined ---- */
   const taskSet = (src, keys) => {
     const t = {};
     keys.forEach(([k]) => { t[k] = !!(src && src.tasks && src.tasks[k]); });
@@ -789,10 +911,8 @@ Views.inspection = async ({ siteId, reportId } = {}) => {
     photos: photoSet(src)
   }, extra || {});
 
-  /* ---- Rascunho da vistoria (persistido ao finalizar) ---- */
   const draft = {
-    /* v14: modo de atendimento + registro do hóspede */
-    mode: g(editSource, 'mode', 'manutencao'),
+    mode: effMode,
     guest: (function (gh){
       gh = gh || {};
       return {
@@ -806,7 +926,7 @@ Views.inspection = async ({ siteId, reportId } = {}) => {
       };
     })(editSource && editSource.guest),
     siteId: g(editSource, 'siteId',
-      (siteId && sites.some((s) => s.id === siteId)) ? siteId : (sites[0] ? sites[0].id : '')),
+      (sites[0] ? sites[0].id : '')),
     dateISO: (editSource ? String(editSource.dateISO).slice(0, 10) : hojeISO()),
     customTasks: customSet(editSource),
     pool: secDraft(editSource && editSource.pool, TASKS.pool, {
@@ -842,27 +962,55 @@ Views.inspection = async ({ siteId, reportId } = {}) => {
     s.volume ? `<span>${icon('droplet')}${fmt0.format(s.volume)} L${s.volumeSource === 'manual' ? ' •' : ''}</span>` : ''
   ].filter(Boolean).join('');
 
-  /* ---- Cards clicáveis de tarefa (fixas + personalizadas) ---- */
+  /* ---- Cards de tarefa (fixas + personalizadas editáveis) ---- */
+  const isCustom = (sec, id) => draft.customTasks[sec].some((c) => c.id === id);
+
   const taskCards = (sec) => {
     const all = TASKS[sec].map(([k, lbl]) => ({ id: k, label: lbl }))
       .concat(draft.customTasks[sec]);
     return `
       <div class="task-grid">
         ${all.map((t) => `
-          <button type="button" class="task-card ${draft[sec].tasks[t.id] ? 'on' : ''}" data-task="${sec}" data-key="${esc(t.id)}">
+          <div class="task-card ${draft[sec].tasks[t.id] ? 'on' : ''}" data-task="${sec}" data-key="${esc(t.id)}" role="button" tabindex="0">
             <span class="tc-check">${icon('check')}</span><span>${esc(t.label)}</span>
-          </button>`).join('')}
+            ${isCustom(sec, t.id) ? `<button type="button" class="tc-edit" data-edit="${sec}" data-id="${esc(t.id)}" aria-label="Editar tarefa">${icon('edit')}</button>` : ''}
+          </div>`).join('')}
       </div>
       <button type="button" class="add-task" data-addtask="${sec}">${icon('plus')} Adicionar nova tarefa</button>`;
   };
   const tasksBlock = (sec) => `<div data-tasks="${sec}">${taskCards(sec)}</div>`;
 
   function bindTaskCards(){
-    $$('.task-card').forEach((b) => b.onclick = () => {
-      const sec = b.dataset.task, key = b.dataset.key;
-      draft[sec].tasks[key] = !draft[sec].tasks[key];
-      b.classList.toggle('on', draft[sec].tasks[key]);
+    /* card inteiro alterna marcado */
+    $$('.task-card').forEach((card) => {
+      card.onclick = (e) => {
+        if (e.target.closest('.tc-edit')) return; /* clique no ✎ não alterna */
+        const sec = card.dataset.task, key = card.dataset.key;
+        draft[sec].tasks[key] = !draft[sec].tasks[key];
+        card.classList.toggle('on', draft[sec].tasks[key]);
+      };
     });
+    /* ✎ abre o editor (renomear/excluir) */
+    $$('.tc-edit').forEach((b) => b.onclick = (e) => {
+      e.stopPropagation();
+      const sec = b.dataset.edit, id = b.dataset.id;
+      const item = draft.customTasks[sec].find((c) => c.id === id);
+      if (!item) return;
+      openTaskEditor(sec, id, item.label, {
+        onSave: (tid, novo) => {
+          item.label = novo;
+          renderTasks(sec);
+          toast('Tarefa renomeada.');
+        },
+        onDelete: (tid) => {
+          draft.customTasks[sec] = draft.customTasks[sec].filter((c) => c.id !== tid);
+          delete draft[sec].tasks[tid];
+          renderTasks(sec);
+          toast('Tarefa excluída.');
+        }
+      });
+    });
+    /* + adicionar (prompt) */
     $$('[data-addtask]').forEach((b) => b.onclick = () => {
       const sec = b.dataset.addtask;
       const label = (window.prompt('Nova tarefa para "' + labelSec(sec) + '":') || '').trim();
@@ -871,7 +1019,7 @@ Views.inspection = async ({ siteId, reportId } = {}) => {
       draft.customTasks[sec].push({ id, label });
       draft[sec].tasks[id] = false;
       renderTasks(sec);
-      toast('Tarefa "' + label + '" adicionada a ' + labelSec(sec) + '.');
+      toast('Tarefa "' + label + '" adicionada. Toque no ✎ para editar.');
     });
   }
   function renderTasks(sec){
@@ -891,8 +1039,11 @@ Views.inspection = async ({ siteId, reportId } = {}) => {
       <span class="hint">Câmera ou galeria • comprimida automaticamente</span>
     </div>`;
 
+  /* v15: seção da piscina com guia de medição + "Como está a água?" */
   const poolBody = () => `
     <div class="vol-line">${icon('droplet')}<span>Litragem do sítio: <strong id="volChip">${volLabel()}</strong></span></div>
+    <button type="button" class="add-task" id="howMeasure" style="border-style:solid;border-color:var(--pool-light);background:var(--pool-light);color:var(--pool-deep)">${icon('book')} Como medir? Guia de cores do teste</button>
+    <p class="hint">Meça com o kit de gotas ou fita-teste e digite os valores abaixo. O app avalia a água e diz o que fazer.</p>
     <div class="grid2">
       <label class="field"><span>pH</span><input type="number" step="0.1" min="0" max="14" inputmode="decimal" data-meas="ph" value="${esc(draft.pool.ph)}" placeholder="7,4"></label>
       <label class="field"><span>Cloro (ppm)</span><input type="number" step="0.1" min="0" inputmode="decimal" data-meas="cloro" value="${esc(draft.pool.cloro)}" placeholder="1,5"></label>
@@ -953,16 +1104,15 @@ Views.inspection = async ({ siteId, reportId } = {}) => {
       </div>
     </div>`;
 
-  App.el.innerHTML = topbar(
-    editSource ? 'Editar Relatório' : 'Nova Vistoria',
-    editSource ? '#/relatorio/' + editSource.id : '#/'
-  ) + `
+  App.el.innerHTML = topbar('Nova Vistoria', editSource ? '#/relatorio/' + editSource.id : '#/') + `
   <main class="view container">
-    <div class="mode-tabs">
-      <button type="button" class="mode-tab ${draft.mode !== 'hospedes' ? 'on' : ''}" data-mode="manutencao">${icon('clipboard')} Manutenção</button>
-      <button type="button" class="mode-tab ${draft.mode === 'hospedes' ? 'on' : ''}" data-mode="hospedes">${icon('user')} Hóspedes</button>
+    <!-- v15: selo do modo fixo + trocar -->
+    <div class="card mode-locked">
+      ${icon(effMode === 'hospedes' ? 'user' : 'clipboard')}
+      <span>Tipo: <b>${labelMode(effMode)}</b></span>
+      ${editSource ? '' : `<button class="btn small ghost" id="changeMode">Trocar</button>`}
     </div>
-    <div id="guestWrap" style="display:${draft.mode === 'hospedes' ? 'block' : 'none'}">${guestBoxHTML()}</div>
+    ${effMode === 'hospedes' ? guestBoxHTML() : ''}
 
     <div class="card form">
       <label class="field"><span>Sítio / Cliente</span>
@@ -997,20 +1147,48 @@ Views.inspection = async ({ siteId, reportId } = {}) => {
   }
   rebuildSelect();
 
+  /* v15: "Como está a água?" + recomendações */
   function renderRecs(){
     const box = $('#recBox');
     if (!box) return;
-    const recs = computeRecs(refVolume(), draft.pool.cloro, draft.pool.ph, draft.pool.dureza);
-    const touched = ['cloro','ph','alcal','dureza'].some((k) => draft.pool[k] !== '');
-    if (!refVolume() && touched){
-      box.innerHTML = `<div class="alert warn">${icon('alert')}<span>Cadastre a litragem do sítio (dimensões ou valor informado) para calcular a dosagem.</span></div>`;
-    } else if (recs.length){
-      box.innerHTML = `<div class="alert warn"><ul>${recs.map((r) => `<li>${icon('droplet')}<span>${esc(r.text)}</span></li>`).join('')}</ul></div>`;
-    } else if (touched){
-      box.innerHTML = `<div class="alert ok">${icon('check')}<span>Parâmetros dentro da faixa ideal. Nenhuma dosagem necessária.</span></div>`;
-    } else {
-      box.innerHTML = '';
+    const vol = refVolume();
+    const recs = computeRecs(vol, draft.pool.cloro, draft.pool.ph, draft.pool.dureza);
+
+    const defs = [
+      ['pH',     'ph',     draft.pool.ph],
+      ['Cloro',  'cloro',  draft.pool.cloro],
+      ['Alcalinidade', 'alcal', draft.pool.alcal],
+      ['Dureza Cálcica', 'dureza', draft.pool.dureza]
+    ];
+    const rows = defs
+      .map(([nm, k, v]) => ({ nm, k, v, vd: paramVerdict(k, v, vol) }))
+      .filter((r) => r.vd);
+    const measured = rows.length > 0;
+
+    let html = '';
+    if (!vol && measured){
+      html += `<div class="alert warn">${icon('alert')}<span>Cadastre a litragem do sítio para o app calcular as dosagens exatas.</span></div>`;
     }
+    if (measured){
+      html += `
+      <div class="water-card">
+        <h4>Como está a água?</h4>
+        ${rows.map((r) => `
+          <div class="water-row ${r.vd.st === 'ok' ? 'water-ok' : 'water-warn'}">
+            <span class="water-dot" style="background:${r.vd.dot}"></span>
+            <span class="water-tx">
+              <b>${r.nm}: ${esc(String(r.v).replace('.', ','))} — ${r.vd.st === 'ok' ? '✓ Ideal' : '⚠ Precisa de atenção'}</b>
+              <small>${esc(r.vd.txt)}</small>
+            </span>
+          </div>`).join('')}
+      </div>`;
+    } else {
+      html += `<div class="alert warn">${icon('book')}<span>Meça os parâmetros com o kit e digite aqui — o app interpreta as cores do teste e diz o que a água precisa.</span></div>`;
+    }
+    if (recs.length){
+      html += `<div class="alert warn"><ul>${recs.map((r) => `<li>${icon('droplet')}<span>${esc(r.text)}</span></li>`).join('')}</ul></div>`;
+    }
+    box.innerHTML = html;
   }
 
   function refreshSiteInfo(){
@@ -1045,15 +1223,23 @@ Views.inspection = async ({ siteId, reportId } = {}) => {
 
   $('#inspDate').onchange = (e) => { draft.dateISO = e.target.value; };
 
-  /* v14: alternância Manutenção/Hóspedes */
-  $$('[data-mode]').forEach((b) => b.onclick = () => {
-    draft.mode = b.dataset.mode;
-    $$('[data-mode]').forEach((x) => x.classList.toggle('on', x === b));
-    $('#guestWrap').style.display = draft.mode === 'hospedes' ? 'block' : 'none';
-    bindGuest();
-  });
+  /* v15: guia de cores */
+  const hm = $('#howMeasure');
+  if (hm) hm.onclick = openMeasureGuide;
 
-  /* v14: campos e tags do hóspede */
+  /* v15: trocar tipo (descarta o que foi digitado) */
+  const cm = $('#changeMode');
+  if (cm) cm.onclick = async () => {
+    if (await confirmDlg({
+      title: 'Trocar tipo de atendimento?',
+      text: 'Você voltará à escolha entre Manutenção e Hóspedes. O que foi digitado nesta tela será descartado.',
+      okLabel: 'Trocar', danger: true
+    })){
+      location.hash = '#/vistoria';
+    }
+  };
+
+  /* v15: campos do hóspede (só existem no modo Hóspedes) */
   function bindGuest(){
     const name = $('#gName');   if (name) name.oninput = (e) => draft.guest.name = e.target.value;
     const wpp  = $('#gWpp');    if (wpp)  wpp.oninput  = (e) => draft.guest.whatsapp = e.target.value;
@@ -1069,7 +1255,7 @@ Views.inspection = async ({ siteId, reportId } = {}) => {
       }
     });
   }
-  bindGuest();
+  if (effMode === 'hospedes') bindGuest();
 
   $$('[data-toggle]').forEach((sw) => sw.onchange = (e) => {
     const key = e.target.dataset.toggle;
@@ -1101,7 +1287,7 @@ Views.inspection = async ({ siteId, reportId } = {}) => {
         break;
       }
       try {
-        draft[sec].photos[kind].push(await compressImage(file)); /* 1 por vez */
+        draft[sec].photos[kind].push(await compressImage(file));
         renderThumbs(slot, sec, kind);
       } catch (_){
         toast('Não foi possível processar esta imagem. Tente pela galeria.', 'warn', 3600);
@@ -1121,7 +1307,7 @@ Views.inspection = async ({ siteId, reportId } = {}) => {
   async function finalizar(){
     if (!draft.siteId) return toast('Selecione o sítio.', 'warn');
 
-    /* v14: hóspede marcou SAÍDA → exigências obrigatórias */
+    /* Hóspede marcou SAÍDA → exigências obrigatórias */
     if (draft.mode === 'hospedes' && draft.guest.left){
       const faltando = [];
       if (!draft.guest.name.trim()) faltando.push('nome do hóspede contratante');
@@ -1262,7 +1448,6 @@ const pdfFileName = (r) => {
   return `NEGRETS-MASTER_${safe}_${String(r.dateISO).slice(0, 10)}.pdf`;
 };
 
-/* WEB SHARE API — envia o PDF direto ao WhatsApp do cliente */
 async function shareReport(r){
   try {
     const blob = await ensurePdf(r);
@@ -1294,7 +1479,6 @@ Views.reportView = async ({ id }) => {
     .reduce((acc, k) =>
       acc + g(r[k].photos, 'before', []).length + g(r[k].photos, 'after', []).length, 0);
 
-  /* Lista combinada (fixas + personalizadas) marcadas como feitas */
   const doneList = (sec) =>
     ReportPDF.combinedList(sec, r[sec] || {}, r.customTasks || {})
       .filter(([, on]) => on).map(([lbl]) => lbl);
@@ -1401,10 +1585,6 @@ Views.reportView = async ({ id }) => {
 };
 
 /* ---------- 12.7 AJUSTES + DIAGNÓSTICO PWA ---------- */
-
-/* Força atualização dos ARQUIVOS preservando os DADOS:
-   apaga Cache Storage, desregistra SWs e recarrega.
-   IndexedDB (clientes/relatórios) fica intacto. */
 async function forceFileRefresh(){
   try {
     const keys = await caches.keys();
@@ -1424,7 +1604,6 @@ async function runPwaDiagnostics(){
     return rows;
   }
 
-  /* SW registrado? Se não, registra AGORA e mostra o erro real */
   let reg = null;
   try { reg = await navigator.serviceWorker.getRegistration(); } catch (_) {}
   if (!reg){
@@ -1433,7 +1612,6 @@ async function runPwaDiagnostics(){
       push('ok', 'Service Worker registrado com sucesso agora.');
     } catch (e){
       push('fail', 'Registro do sw.js FALHOU: ' + ((e && e.message) || e));
-      push('fail', '→ Abra https://negrete79.github.io/sw.js no navegador. Se der 404, o arquivo não está na RAIZ.');
     }
   } else {
     push(reg.active ? 'ok' : 'warn',
@@ -1446,7 +1624,6 @@ async function runPwaDiagnostics(){
       ? 'Página sob controle do SW — offline garantido.'
       : 'Página ainda não controlada: use "Forçar atualização" ou feche/abra o app (só na 1ª vez).');
 
-  /* sw.js é servido e parece válido? */
   try {
     const r3 = await fetch('sw.js', { cache: 'no-store' });
     if (!r3.ok){
@@ -1458,7 +1635,6 @@ async function runPwaDiagnostics(){
     }
   } catch (_){ push('fail', 'sw.js inacessível.'); }
 
-  /* manifest + ícones */
   try {
     const res = await fetch('manifest.json', { cache: 'no-store' });
     if (!res.ok){
@@ -1529,7 +1705,6 @@ Views.settings = async () => {
     toast('Ajustes salvos.');
   };
 
-  /* Botão instalar — com feedback real */
   const ib = $('#installBtn');
   if (deferredPrompt) ib.hidden = false;
 
@@ -1590,11 +1765,7 @@ Views.settings = async () => {
 };
 
 /* =========================================================
-   13. MIGRAÇÃO — normaliza relatórios/sítios antigos
-   Garante que todo relatório tenha: house, customTasks,
-   mode, guest, photos, tasks, sections e dureza no formato
-   atual. Assim nenhuma tela quebra, independente da idade
-   do dado gravado.
+   13. MIGRAÇÃO
    ========================================================= */
 async function normalizeReports(){
   const reports = await DB.all('reports');
@@ -1616,7 +1787,7 @@ async function normalizeReports(){
       }
     };
     fixSec('pool'); fixSec('site'); fixSec('garden');
-    fixSec('house'); /* v14 */
+    fixSec('house');
 
     if (r.pool && typeof r.pool.dureza === 'undefined'){ r.pool.dureza = ''; changed = true; }
     if (!Array.isArray(r.sections)){
@@ -1629,11 +1800,10 @@ async function normalizeReports(){
     if (typeof r.mode === 'undefined'){ r.mode = 'manutencao'; changed = true; }
     if (typeof r.guest === 'undefined'){ r.guest = null; changed = true; }
 
-    if (r.pdfBlob){ delete r.pdfBlob; } /* formato muito antigo */
+    if (r.pdfBlob){ delete r.pdfBlob; }
     if (changed) await DB.put('reports', r);
   }
 
-  /* Sítios antigos ganham os campos de litragem manual */
   const sites = await DB.all('sites');
   for (const s of sites){
     let ch = false;
@@ -1644,14 +1814,11 @@ async function normalizeReports(){
 }
 
 /* =========================================================
-   14. BOOT
-   (O Service Worker é registrado no index.html — sem duplicar.)
+   14. BOOT (SW registrado no index.html — sem duplicar)
    ========================================================= */
 async function init(){
   console.log('[NEGRET\'S] App v' + APP_VERSION);
   App.el = $('#app');
-
-  /* Ícones da barra de navegação (index.html usa data-ic) */
   $$('[data-ic]').forEach((el) => { el.outerHTML = icon(el.dataset.ic); });
 
   await DB.open();
