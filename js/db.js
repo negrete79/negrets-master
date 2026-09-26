@@ -1,9 +1,6 @@
 /* =========================================================
-   db.js — Camada de persistência 100% OFFLINE (IndexedDB)
-   Stores:
-     sites    → sítios/clientes (com litragem calculada)
-     reports  → vistorias (fotos em Base64 + Blob do PDF)
-     settings → dados da empresa ({key:'company', value:{...}})
+   db.js — Persistência 100% OFFLINE (IndexedDB) — v14
+   Stores: sites | reports | settings
    ========================================================= */
 const DB = (() => {
   'use strict';
