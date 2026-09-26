@@ -1,12 +1,12 @@
 /* =========================================================
-   NEGRET'S MASTER — sw.js (v14)
+   NEGRET'S MASTER — sw.js (v15)
    Navegação → rede primeiro, cache como reserva.
    Assets    → cache primeiro + revalidação em 2º plano.
    Pré-cache tolerante: arquivo faltando não quebra a instalação.
    ========================================================= */
 'use strict';
 
-const VERSION = 'negrets-master-v14';
+const VERSION = 'negrets-master-v15';
 
 const APP_SHELL = [
   './',
